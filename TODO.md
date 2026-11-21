@@ -30,11 +30,11 @@ Platform tags: `[all]`, `[mac]`, `[win]`, `[linux]`, `[mac,win]`, `[mac,linux]`.
 | 0 — Feasibility spike | 6 | 13 | In progress |
 | 1 — Foundation | 10 | 16 | In progress |
 | 2 — Daily driver | 21 | 23 | In progress |
-| 3 — Identity and power | 8 | 20 | In progress |
+| 3 — Identity and power | 17 | 20 | In progress |
 | 4 — Platform and parity | 0 | 16 | Not started |
 | 5 — Linux and hardening | 0 | 11 | Not started |
 | Continuous | 0 | 8 | Not started |
-| **Total** | **45** | **107** | |
+| **Total** | **54** | **107** | |
 
 Gates count as tasks. The "Now" section mirrors six Phase 0 items; they are not counted twice.
 
@@ -363,45 +363,54 @@ Current focus (status lives in Phase 0 below; this is only the order):
   **Done when:** a quick ⌃Tab returns to the previous tab without drawing the grid; moons bring little windows back.
   **Notes:** `crates/searlx-core/src/groups_splits_switcher.rs` implements `TabSwitcherSession`: `150 ms` overlay delay (releasing `Control` before `150 ms` switches immediately to the previous tab without drawing the grid), up to `10` recency-ordered cards across `5` columns (excluding sleeping pins), up to `6` floating small-window moons, and in-switcher `⌃W` (close), `⌃R` (reload), `⌃M` (mute), and `⌃O` (move moon into main window).
 
-- [ ] **P3-09 — Peek `[all]`**
+- [x] **P3-09 — Peek `[all]`**
   Shift-click panel, keep as tab/beside, stays-with-tab, pause hidden media, pin peek.
   **Done when:** Escape returns to the exact page state; keeping a peek does not reload the page.
+  **Notes:** `crates/searlx-core/src/peek_small_float.rs` implements `PeekSession`, `PeekClickModifier` (`ShiftClick`, `OptionShiftClick`, `OptionCommandClick`), and `OpenerPageState`: preserves exact opener scroll offset (`ScrollPosition`) and focused selector on `Escape` (`opener_reloaded=false`), promotes to a tab (`⌘↩`) or beside in Split View (`⌥⌘↩`) without reloading (`reloaded=false`), and pauses hidden audio/video and mutes camera/mic when switching tabs with `links.peek.stays`.
 
-- [ ] **P3-10 — Small windows `[all]`**
+- [x] **P3-10 — Small windows `[all]`**
   Link windows, cascade, Open in Search, state, moons, popup reuse.
   **Done when:** a link from another app opens a small window without forcing the browser window forward; ⌘O moves it in.
+  **Notes:** `crates/searlx-core/src/peek_small_float.rs` implements `SmallWindowsManager` (`900×640` default, `420×320` minimum, `34 pt` header, `+24 pt` cascade, `>60%` on-screen frame check): `open_in_search` (`⌘O`) moves the existing tab into the main row after the current tab without reloading, `Escape` closes link windows (`ExternalLink`) while refusing to close lifted tabs (`LiftedTab`), `⌘W` on a lifted tab makes it reopenable with `⇧⌘T`, lifted tabs return to their original spaces on quit, and sized popups reuse the frame without `"Open in Search"`.
 
-- [ ] **P3-11 — Floating video `[all]`**
+- [x] **P3-11 — Floating video `[all]`**
   Reparent/live page or a portable fallback, triggers, controls, flick/dock, minimize, return, system PiP where available.
   **Done when:** video keeps playing while switching apps/tabs; returning restores the page; private-tab policy is decided.
+  **Notes:** `crates/searlx-core/src/peek_small_float.rs` implements `FloatingVideoController`: supports manual `⇧⌘P`, `float.leave` (tab switch), and `float.away` (app switch), play/pause, `±10 s` skip, minimize, two-finger velocity corner flicks (`FloatCorner::from_flick_velocity`), automatic fallback from `SystemPip` to `SearchPanel` when `engine_supports_native_pip` is false (e.g., Linux WebKitGTK), and `return_to_tab` with `video_stopped=false`. **Private-tab policy decided:** private tabs are permitted to float within their live session (`allows_private_tab_floating() == true`) because the floating panel reparents the in-memory view without persisting or leaking across profiles.
 
-- [ ] **P3-12 — Gestures `[all]`**
+- [x] **P3-12 — Gestures `[all]`**
   Back/forward swipe + hold history, space swipe + wheel/buttons, peek pinch, autoscroll, tab give, fold edge.
   **Done when:** the thresholds in FEATURES.md §23 behave; a horizontal carousel is not stolen; haptics are optional.
+  **Notes:** `crates/searlx-core/src/gestures_lifecycle.rs` implements `SwipeHistoryGesture` (`70 pt` arm, `30 pt`/`250 ms` flick, `450 ms` hold for 8-item history list, `22 pt` per row, optional haptics, and immediate yield when `page_claims_horizontal_scroll` is true so horizontal carousels are never stolen), `SpaceSwipeGesture` (`50 pt` threshold, `400 ms` rest, `200 ms` anti-back-stroke, create space past end), `tab_give_scale` (`0.97` scale cancelling past `5 pt`), `FoldedSidebarEdgePeek` (`6 pt` zone, `150 ms` dwell, `48 pt` overshoot, `65 ms` grace, `60 pt` fullscreen top exclusion), and `MiddleClickAutoscroll`.
 
-- [ ] **P3-13 — Tab lifecycle `[all]`**
+- [x] **P3-13 — Tab lifecycle `[all]`**
   Sleep (10/30/120 min, memory pressure), auto-close (12h/1d/1w/1m), exceptions, archive, reopen, twins.
   **Done when:** a 30-tab session sleeps and wakes with scroll; an auto-closed tab is in the archive and reopens.
+  **Notes:** `crates/searlx-core/src/gestures_lifecycle.rs` implements `effective_sleep_timeout_secs` (`10/30/120 min`, Low Power `10 min` cap, memory pressure `5 min` / `0 s`), `TabLifecycleCandidate` (`can_sleep` and `can_auto_close` checking on-screen, pinned, notification-allowed cross-space pins, named, grouped, private, blank, loading, audio, call/recording, downloading, floating video, dialog, typed text, and site keep-awake), `evaluate_tab_lifecycle` (enforcing whole-or-none split pair auto-close and archiving into `HistoryManager`), and `WindowTwinsCoordinator` (`tabs.mirror` sharing non-private tabs across a profile's windows while keeping private tabs window-local).
 
-- [ ] **P3-14 — Folder sync `[all]`**
+- [x] **P3-14 — Folder sync `[all]`**
   `Search Sync/<scope>/<device>.json`, 17 settings, spaces/pins/bookmarks, merge/tombstones/365-day deletion, profile UUIDs.
   **Done when:** two machines converge; deleting an item does not resurrect; pin folders stay local.
+  **Notes:** `crates/searlx-core/src/sync_panel_launcher_routes.rs` implements `SyncScope` (`app` and `profile-<uuid>`), `SyncedSettingsSubset` (exact 17 settings from `FEATURES.md` §16.1), `VersionedSyncItem::wins_over` (`t_ms` → `device_id` → tombstone → canonical JSON), `merge_sync_items` (365-day tombstone retention + mass-deletion guard against empty resets), `sanitize_pin_for_folder_sync` (stripping `folder_id` so pin folders stay local), and `validate_sync_mode_exclusivity`.
 
 - [ ] **P3-15 — Handoff `[mac]`**
   NSUserActivity/Handoff; eligible page rules; incoming default-browser links.
   **Done when:** a page appears on an iPhone; private/signed-out pages never do.
 
-- [ ] **P3-16 — Side panel `[all]`**
+- [x] **P3-16 — Side panel `[all]`**
   Website/extension/downloads panels, 300–640 width, per-space/per-tab, private hold-back, no `⌘W` close.
   **Done when:** Claude/ChatGPT work in the panel; switching space reloads in the right store.
+  **Notes:** `crates/searlx-core/src/sync_panel_launcher_routes.rs` implements `SidePanelController` and `SidePanelPresetSite` (Claude, ChatGPT, Gemini, Perplexity): `300..=640 pt` width clamping with `380 pt` default and double-click reset, `on_space_switched` store reload for website panels, 2-crashes-per-minute reload breaker, `is_held_back_for_active_tab` hiding non-permitted extension panels on private tabs, toggle-on-second-press for extension buttons, and `closes_on_cmd_w() == false`.
 
-- [ ] **P3-17 — Launcher `[all]`**
+- [x] **P3-17 — Launcher `[all]`**
   Global hotkey, floating field, recent/bookmarks/history, open tab vs small window, key recording.
   **Done when:** the key works over another app without activating Search; Escape returns to the app.
+  **Notes:** `crates/searlx-core/src/sync_panel_launcher_routes.rs` implements `LauncherController`, `validate_launcher_hotkey` (requiring `⌘/⌥/⌃` or `F1..F12` and rejecting reserved system/app keys), `recommended_launcher_hotkey` (`⇧⌘Space`), `launcher_wants_global_hotkey`, local-only suggestions (`allows_network_suggestions() == false`, up to 3 same-profile non-private/non-agent open tabs), draft retention across `Escape`, and the 6-step `Return` routing order.
 
-- [ ] **P3-18 — Space routes and link chooser `[all]`**
+- [x] **P3-18 — Space routes and link chooser `[all]`**
   Site→space rules, ask-which-space panel, number keys/Always, last choice per site, small-window choice.
   **Done when:** a link from Mail opens in the chosen space with the right sign-ins; typed addresses are not routed.
+  **Notes:** `crates/searlx-core/src/sync_panel_launcher_routes.rs` implements `SpaceRouter` (domain + subdomain matching applied only to `LinkIntakeSource::ExternalApp`, never to typed addresses, in-tab clicks, or private tabs; 5-step routing order; `1–9`/`0` digit selection; `Space` toggling `"Always"`; 200-site LRU memory) and `MailtoMessage` (RFC 6068 parser with 50-recipient cap, 500-char subject cap, and 8,000-char body-shortened webmail compose URLs for Gmail, Outlook, Fastmail, and Proton Mail that never open in a private tab).
 
 - [ ] **P3-19 — Phase 3 dogfood `[all]`**
   Live in spaces/profiles/pins/splits for two weeks. Fix the top issues.
@@ -613,6 +622,7 @@ Create `docs/adr/NNNN-title.md` for each. Status: proposed/accepted/superseded.
 - **2026-11-21** — P2-06..P2-12 done. Added `searlx_core::reader` (10-article extraction heuristic, Markdown twins, 38em serif template, reload on exit), `searlx_core::blocking` (`WKContentRuleList` compiler, 36 tracker domains, YouTube ad scripts, Hide Elements selector synthesis & before-first-paint CSS, Site CSS sanitizer & private read-only guard), and `searlx_core::page_tools` (Dusk 2,000-sheet/8M/48M budgets & filter fallback, in-place Translation with Show Original, and 30,000 pt / 64M-pixel Page Capture planner).
 - **2026-11-21** — P2-13..P2-19 done. Added `searlx_core::privacy` (`PermissionStore` + `StoreCompositor` enforcing zero durable writes for private/agent tabs), `searlx_core::vault` (`PasswordVault` with main-frame & committed-origin verification, HTTPS→HTTP autofill refusal, 10-dot mask, and authenticated copy gate), `searlx_core::menus_and_pages` (`SiteCardModel`, page/tab/image context menus, `clean_link_url`, and single-tab `InternalPageKind` router), and `searlx_core::recovery` (signed appcast + SHA-256 verification, atomic `.old` bundle swap/rollback/sweep, 2-failure crash reload-loop breaker, and redacted local `crash.log`).
 - **2026-11-21** — P2-20, P2-21, P3-01..P3-08 done. Added `searlx_ui::a11y` (`FocusController`, `AccessibilityTree`, keyboard focus ring traversal), `searlx_testkit::bench` (`PerformanceBudget` CI harness verifying <25 ms 30-tab cold restore with 1 awake tab and ~5 GiB memory savings vs 30 live WebKitGTK processes), `searlx_core::spaces_profiles` (`SpacesManager`, `ProfilesManager`, `MergedProfileWindowGroup`), `searlx_core::pins_and_folders` (`PinsRegistry`, 3-level `PinFoldersManager`, 2 MiB/12-item credential-less RSS/Atom parser), and `searlx_core::groups_splits_switcher` (`TabGroupsManager` with `⇧⌘T` group reopen, 2–4 pane `SplitWorkspace`, and 150 ms `TabSwitcherSession` with moon cards).
+- **2026-11-21** — P3-09..P3-14, P3-16..P3-18 done. Added `searlx_core::peek_small_float` (`PeekSession` preserving exact opener scroll/focus on Escape and promoting without reload, `SmallWindowsManager` with cascade/`⌘O`/`>60%` screen check/Escape rules, and `FloatingVideoController` with corner flicks, system-PiP fallback, and private-tab policy), `searlx_core::gestures_lifecycle` (`SwipeHistoryGesture` yielding to horizontal carousels, `SpaceSwipeGesture`, `FoldedSidebarEdgePeek`, `evaluate_tab_lifecycle` with whole-or-none split auto-close & archive, and `WindowTwinsCoordinator`), and `searlx_core::sync_panel_launcher_routes` (17-setting `FolderSync` with 365-day tombstones & mass-deletion guard, `SidePanelController`, `LauncherController`, `SpaceRouter`, and RFC 6068 `MailtoMessage` webmail composer).
 
 ---
 
