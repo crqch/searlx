@@ -171,6 +171,13 @@ pub fn default_data_dir() -> PathBuf {
 /// # Errors
 /// Returns an error string if GTK cannot connect to an X11/Wayland display.
 pub fn run_gtk_browser(initial_urls: &[String]) -> Result<(), String> {
+    // Per ADR-0002 and Phase 0 measurements, WebKitGTK on GTK3 has reliable keyboard
+    // focus and overlay composition on X11/XWayland, whereas native Wayland leaves
+    // WebView focus ungrabbed. Prefer X11/XWayland when DISPLAY is present unless
+    // the user explicitly set GDK_BACKEND.
+    if std::env::var_os("GDK_BACKEND").is_none() && std::env::var_os("DISPLAY").is_some() {
+        gdk::set_allowed_backends("x11,*");
+    }
     if let Err(err) = gtk::init() {
         return Err(format!(
             "GTK could not initialize display (ensure DISPLAY or WAYLAND_DISPLAY is set): {err}"
