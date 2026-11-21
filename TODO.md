@@ -29,12 +29,12 @@ Platform tags: `[all]`, `[mac]`, `[win]`, `[linux]`, `[mac,win]`, `[mac,linux]`.
 |---|---:|---:|---|
 | 0 — Feasibility spike | 6 | 13 | In progress |
 | 1 — Foundation | 10 | 16 | In progress |
-| 2 — Daily driver | 12 | 23 | In progress |
+| 2 — Daily driver | 19 | 23 | In progress |
 | 3 — Identity and power | 0 | 20 | Not started |
 | 4 — Platform and parity | 0 | 16 | Not started |
 | 5 — Linux and hardening | 0 | 11 | Not started |
 | Continuous | 0 | 8 | Not started |
-| **Total** | **28** | **107** | |
+| **Total** | **35** | **107** | |
 
 Gates count as tasks. The "Now" section mirrors six Phase 0 items; they are not counted twice.
 
@@ -265,33 +265,40 @@ Current focus (status lives in Phase 0 below; this is only the order):
   **Done when:** a 20,000 pt page captures without a white strip; an element capture outlines correctly.
   **Notes:** `crates/searlx-core/src/page_tools.rs` implements `plan_page_capture` with 30,000 pt height cap, 64M pixel cap, 2×2 pt minimum, PDF-first rasterization for whole-page shots (avoiding off-screen white strips), `<tag> · W×H` element outline labels, site-neutral `Capture YYYY-MM-DD at HH.MM.SS.png` naming, local-only clipboard flag, and `clipboard_transient=true` for private tabs.
 
-- [ ] **P2-13 — Site card `[all]`**
+- [x] **P2-13 — Site card `[all]`**
   Connection, certificate, copy/print, zoom, blocker, permissions, autoplay, float-off, darken, keep-awake.
   **Done when:** every row in FEATURES.md §5.8 is present and gated correctly.
+  **Notes:** `crates/searlx-core/src/menus_and_pages.rs` implements `SiteCardModel::build` gating every row of `FEATURES.md` §5.8: header (host without `www.`, `"File"`, or scheme), connection/certificate label, copy address shortcut, print capability check, zoom (`40–300%` web, `20–600%` PDF, 5% steps), ad/tracker blocker (`!private && http(s) && shield && !trouble`), site permissions (`http(s)` with private notice, global-notification-off warning, and port-disagreement warning), `"Play Sound by Itself"` (`!private && http(s) && !media.click`), `"Don't Float Videos Here"` (known video sites), `"Darken This Site"`, and `"Keep This Site Awake"`, while excluding mute/site CSS/reader.
 
-- [ ] **P2-14 — Permissions and private tabs `[all]`**
+- [x] **P2-14 — Permissions and private tabs `[all]`**
   Camera/mic/location/notifications/screen; per-origin; private refusal; forget choices; ephemeral store; no history/session/favicon/password offer.
   **Done when:** a private tab leaves no trace after close; permissions persist per site only in normal tabs.
+  **Notes:** `crates/searlx-core/src/privacy.rs` implements `PermissionStore` (`capture.<origin>|<kind>`, immediate refusal for private and agent tabs, `"Forget choices"` reset, port-spelling conflict check) and `StoreCompositor`, enforcing in one boundary (`AGENTS.md` §9) that private and agent tabs write zero history, favicons, password save offers, permissions, Handoff, or iCloud state, and signalling ephemeral store destruction when the last private tab closes.
 
-- [ ] **P2-15 — Password vault `[all]`**
+- [x] **P2-15 — Password vault `[all]`**
   Credential-store trait + OS backends; save/fill; account list; Touch ID/Hello/Secret Service; show/copy gates; clear-http rules; no export.
   **Done when:** a sign-in saves after success, fills only on the same origin, and never fills a password saved from https on http.
+  **Notes:** `crates/searlx-core/src/vault.rs` implements `PasswordVault` and redacted `VaultSecret`: post-sign-in save/update/last-used evaluation (suppressed in private/agent tabs, `passwords.never` hosts, and Apple Passwords fills), main-frame-only offer list (max 5), strict committed-origin re-verification on fill, **strict HTTPS→HTTP downgrade block** (passwords saved from `https://` are never offered or filled on `http://`), 10-dot `"••••••••••"` masking unless device-owner authenticated (15 s auto-hide), authenticated concealed clipboard copy (90 s auto-clear), and no export writer.
 
-- [ ] **P2-16 — Keyboard and context menus `[all]`**
+- [x] **P2-16 — Keyboard and context menus `[all]`**
   All Phase 1/2 commands, default keys, user overrides, tab/page/image menus, reduced/disabled entries.
   **Done when:** the shortcut table in FEATURES.md §22 is covered or explicitly dropped; menu items disable correctly.
+  **Notes:** `crates/searlx-core/src/commands.rs` covers the full `FEATURES.md` §22 shortcut inventory, and `crates/searlx-core/src/menus_and_pages.rs` implements `build_page_context_menu` (`Open Link in New Tab`, `Open Link in New Tab and Go to It`, `Open Link in Split View`, `Copy Clean Link` via `clean_link_url`, non-linked image menu, `Search with <engine>`, `Translate Page` / `Show Original`) and `build_tab_context_menu` (pin/unpin/rehome, mute/unmute, and `Put to Sleep` disabled on the active/audible/loading tab).
 
-- [ ] **P2-17 — Internal pages `[all]`**
+- [x] **P2-17 — Internal pages `[all]`**
   `search://settings|history|downloads|bookmarks|passwords|archive|import|release-notes`, one tab per kind, Back/Forward trail.
   **Done when:** asking twice brings the existing tab forward; private tabs never become internal pages.
+  **Notes:** `crates/searlx-core/src/menus_and_pages.rs` implements `InternalPageKind` and `open_internal_page`: deduplicates to one tab per kind per window (bringing an existing tab forward and updating its detail route), reuses an active non-private blank tab, and never turns a private tab into an internal page.
 
-- [ ] **P2-18 — Update mechanism `[mac,win]`**
+- [x] **P2-18 — Update mechanism `[mac,win]`**
   Signed feed, hash/signature verification, staged install, no auto-relaunch, rollback behavior.
   **Done when:** a bad signature is refused; a good update installs on next launch; the old bundle is swept.
+  **Notes:** `crates/searlx-core/src/recovery.rs` implements `verify_update_release` (requiring HTTPS, same-host archive URL, `com.officecommun.search.appcast` identifier, team `7BYKA895MC`, detached signature verification, and SHA-256 match), `install_verified_bundle_swap` (renaming current to `.old`, swapping new into place, rolling back `.old` on failure, and setting `auto_relaunched=false`), and `sweep_old_bundle`.
 
-- [ ] **P2-19 — Crash and error recovery `[all]`**
+- [x] **P2-19 — Crash and error recovery `[all]`**
   Process crash, reload loops, in-page errors, quarantine, crash log.
   **Done when:** a crashing page shows a retry after two failures; a corrupt file is set aside, not overwritten.
+  **Notes:** `crates/searlx-core/src/recovery.rs` implements `CrashRecoveryManager` (auto-reloading the first crash and suppressing reload loops into `ShowManualRetry` after 2 failures within 60 seconds) and `append_crash_log` (writing one redacted single-line record to local `crash.log` using `PageUrl::redacted()`, never uploading anything). Corrupt data files are quarantined by `DataStore`.
 
 - [ ] **P2-20 — Accessibility baseline `[all]`**
   Names/roles/focus for chrome; page content reachable; keyboard-only pass; reduced motion; high contrast.
@@ -594,6 +601,7 @@ Create `docs/adr/NNNN-title.md` for each. Status: proposed/accepted/superseded.
 - **2026-11-21** — P1-08, P1-09, P1-10, P1-11, P1-12 done; P1-06 core+UI landed. Added `searlx_core::session` (asleep restore, 30-tab <10 ms restore, fresh-start mode, private-tab filtering, corrupt-file quarantine), `searlx_core::settings` (typed settings, 11 `search://settings/<slug>` pages, synonym search with parent-dimming), `searlx_core::commands` (`CommandRegistry`, `⌘S` folds sidebar, conflict & reserved-key rejection), `searlx_core::import` (`O_NOFOLLOW`, symlink rejection, 64 MiB cap, asleep tab import, idempotent merge), `searlx_core::tabs` (`TabModel` + unified `DragSession`), and high-contrast/reduce-motion/1x-2x icon helpers in `searlx-ui`.
 - **2026-11-21** — P2-01..P2-05 done; P1-13 packaging skeleton landed. Added `searlx_core::navigation` (50-link session stack, redirect collapse, swipe-hold 8-item menu, internal-page trail, in-page error model), `searlx_core::find` (`"3 of 17"` / `"1 of 1,000+"` status strings, 1,000 cap, PDF whole-words fallback, Settings-tab routing), `searlx_core::history` (2,000/2,250 caps, day grouping, full clear side effects), `searlx_core::bookmarks` (1,500-bookmark tree, cycle-safe move, remove count, no export writer), and `searlx_core::downloads` (1 GB GET pause/resume, POST pause refusal, duplicate numbering, private unlisted).
 - **2026-11-21** — P2-06..P2-12 done. Added `searlx_core::reader` (10-article extraction heuristic, Markdown twins, 38em serif template, reload on exit), `searlx_core::blocking` (`WKContentRuleList` compiler, 36 tracker domains, YouTube ad scripts, Hide Elements selector synthesis & before-first-paint CSS, Site CSS sanitizer & private read-only guard), and `searlx_core::page_tools` (Dusk 2,000-sheet/8M/48M budgets & filter fallback, in-place Translation with Show Original, and 30,000 pt / 64M-pixel Page Capture planner).
+- **2026-11-21** — P2-13..P2-19 done. Added `searlx_core::privacy` (`PermissionStore` + `StoreCompositor` enforcing zero durable writes for private/agent tabs), `searlx_core::vault` (`PasswordVault` with main-frame & committed-origin verification, HTTPS→HTTP autofill refusal, 10-dot mask, and authenticated copy gate), `searlx_core::menus_and_pages` (`SiteCardModel`, page/tab/image context menus, `clean_link_url`, and single-tab `InternalPageKind` router), and `searlx_core::recovery` (signed appcast + SHA-256 verification, atomic `.old` bundle swap/rollback/sweep, 2-failure crash reload-loop breaker, and redacted local `crash.log`).
 
 ---
 
