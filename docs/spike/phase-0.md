@@ -142,34 +142,43 @@ done
 ### 5.2 Hard interactions (P0-07)
 
 `crates/searlx-engine-linux/src/bin/interactions.rs` builds the five
-interactions in the GTK shell and drives them programmatically:
+interactions in the GTK shell. Its default mode drives the handlers
+programmatically; `--external` waits for real X11 events (`xdotool` on a private
+`Xvfb :5` 1280×900×24 display), logs widget rectangles, measures GTK frame clock
+and input-to-next-frame latency (`add_tick_callback`), and samples in-page focus,
+scroll, `requestAnimationFrame`, and `requestVideoFrameCallback` counters:
 
-| Interaction | What was exercised | Result | What is still manual |
+| Interaction | Programmatic & real X11 (`--external` + `xdotool`) | Measured latency / rate | What is still manual |
 |---|---|---|---|
-| Overlay menu above a page | `GtkPopover` anchored to a menu button, `popup()`/`popdown()` | `visible=true`, `relative_to_menu=true`, then `visible=false` after popdown. The X11 window image shows the menu button and the overlay chip above the split page. | A real pointer click and the menu items' hover/selection. The popover content is a separate 72×48 GdkWindow; window readback did not include its rows. |
-| Tab drag with a lift panel | Popup lift window shown at `(321, 140)`, hidden after 400 ms; notebook `reorder_child` | `tab_lift shown=true`, `hidden=true`, `tab_reorder current=1 pages=2`; the video image shows the tabs reordered to Page, Split. | A real drag gesture and drop target hit-testing. The lift was moved by code, not by a pointer. |
-| Split divider | `GtkPaned` position `560 → 374 → 224` at width 748 | Every request matched `position()`; `size-allocate` followed. | Dragging the 7 pt gutter with a pointer; the 250 pt minimum; focus routing. |
-| IME/emoji | Emoji in `GtkEntry` and in page text; `preedit-changed`/`changed` handlers | Entry text `searlx 🙂` (`has_emoji=true`); page title `emoji-🙂`, page text 13,040 chars. | Real IME composition (CJK preedit, candidate window) and emoji input from a keyboard. |
-| Video fullscreen/PiP/floating | Local 640×360 VP9 WebM, `play()`, `requestFullscreen()`, PiP capability query | `readyState=4`, `videoWidth=640`, `videoHeight=360`, `currentTime≈0.004`, `paused=false`, `playState=ok`. Fullscreen API exists and `document.fullscreenElement` was non-null; the scripted promise succeeded in one run and rejected with `TypeError` in another. **PiP is absent:** `pictureInPictureEnabled=false`, `requestPictureInPicture` missing. Floating/reparenting was not implemented. | A real user gesture for fullscreen, visible frames (the window snapshot is black in the video area), audio, and any floating-player design. |
+| Overlay menu above a page | `GtkOverlay` chip clicked via X11 pointer (`overlay_clicked count=1`); `GtkPopover` opened by clicking `Menu` (`menu_toggled active=true`) and dismissed with `Escape` (`popover_closed`). | Overlay click → next frame: **12.0 ms**; menu open → next frame: **6.1 ms**; menu close → next frame: **3.0 ms**. | Hover/selection inside popover items on a physical display. |
+| Tab drag with a lift panel | Programmatic popup lift window shown at `(321, 140)` and hidden; real X11 pointer drag from `tab-right` `(104, 69)` to `tab-left` `(29, 69)` fired `tab_switched index=1` and `tab_reordered child=tab index=0`. | Tab reorder → next frame: **0.33 ms**. | Detaching a tab into a separate window across a window manager. |
+| Split divider & window resize | Programmatic `560 → 374 → 224`; real X11 pointer drag moved divider `560 → 440` (`split_alloc width=1178 height=691 position=440`); `xdotool windowsize 900 620` resized the window to `900×620` (`split_alloc 898×531 position=335`). | Split divider notify → next frame: **0.05 ms**; window resize → next frame: **11.5 ms**. | 250 pt minimum clamp and 15 pt center snap in the custom split container. |
+| IME / Compose / emoji & scroll | Real X11 typing `searlx `, Unicode key `U1F642` (`🙂`), and X11 Compose `Multi_key o c` produced `entry_preedit "·" → "o" → ""` and committed `"searlx 🙂©"`. Real X11 click focused left WebView (`hasFocus=true`) and 6 wheel events scrolled `scrollY: 0 → 468`. | First entry key → next frame: **14.2 ms**; GTK frame clock: **60.3 fps** (182 ticks / 3,016 ms); in-page `requestAnimationFrame`: **~62 fps** (`raf` 0 → 560 over 9 s). | Full CJK IME daemon (IBus/Fcitx5 candidate window) on an unlocked desktop. |
+| Video fullscreen/PiP/floating | Local 640×360 VP9 WebM (`readyState=4`, `videoPaused=false`); `requestVideoFrameCallback` advanced `videoFrames: 1 → 112` (`videoTime` 0 → 1.21 s looped). Real X11 click + `f` key entered DOM fullscreen (`fullscreen=true`), `Escape` exited (`fullscreen=false`), `p` key reported `pip-unsupported`. **PiP is absent:** `pictureInPictureEnabled=false`, `requestPictureInPicture` missing. | ~30 fps video frame callbacks while active; self `VmRSS` ~194–202 MiB with 3 webviews + video. | Visible video frames on a physical monitor (X11 pixbuf readback over the video area is black), audio output, and a portable floating-player window. |
 
-The program exits `ok` after 3.4 s; self RSS with two pages plus video was
-~196 MB. The important negative result is **native PiP is not available on
-WebKitGTK 2.54.2**. The capability descriptor now reports `native_pip = false`;
-the UI must hide the PiP control on Linux rather than offer a dead button.
+The program exits `ok` (3.4 s programmatic, 14.5 s external); self RSS with two
+split pages, a second tab, and video was ~196–202 MiB. The important negative
+result is **native PiP is not available on WebKitGTK 2.54.2**. The capability
+descriptor reports `native_pip = false`; the UI must hide the PiP control on
+Linux rather than offer a dead button.
 
 The second negative result is that **window/page snapshots do not capture video
-frames** even while `currentTime` advances. Video evidence needs a real display,
-a compositor capture, or a frame callback; a black PNG is not proof that playback
-failed.
+frames** even while `currentTime` and `requestVideoFrameCallback` advance. Video
+evidence needs a real display or frame callback; a black PNG is not proof that
+playback failed.
 
-All five interactions are wired and their logic runs. None of the pointer or IME
-paths are proven by this run. P0-07 stays in progress.
+All five interactions are wired and verified through the real X11 event path on
+`Xvfb`. Physical-display CJK IME and human visual inspection remain open for an
+unlocked desktop session.
 
 ### Evidence
 
 - [X11 page snapshot](evidence/x11-page.png)
 - [X11 window snapshot](evidence/x11-window.png) — chrome, page, and the overlay
   chip are all visible.
+- [X11 external interactions snapshot](evidence/x11-interactions-external.png) —
+  after real X11 pointer/keyboard/drag/resize (`900×620`, tabs reordered, entry
+  `"searlx 🙂©"`).
 - [Wayland page snapshot](evidence/wayland-page.png)
 
 ## 6. What worked
@@ -189,17 +198,16 @@ paths are proven by this run. P0-07 stays in progress.
 | Item | Status |
 |---|---|
 | WebKitGTK inside gpui | Impossible with gpui 0.2.2; no Linux native-view API. |
-| Real pointer click on the overlay | Not tested. The handler was invoked programmatically. |
-| Real keyboard input / IME / emoji | Not tested. Locked session. |
-| Frame rate during scroll or resize | Not measured. Event delivery is not a frame rate. |
-| Resize actually changing the window | Requested 900×620, but the logged allocation stayed 750×981. Unverified under this window manager. |
+| Real X11 pointer/keyboard/wheel/drag/resize | Verified on `Xvfb :5` with `xdotool` (`--external`): overlay click (12.0 ms), popover toggle (6.1 ms), wheel scroll (`scrollY=468`), split drag (`560 → 440`, 0.05 ms), tab drag reorder (0.33 ms), window resize (`1180×780 → 900×620`, 11.5 ms). Physical unlocked display still recommended. |
+| Real keyboard input / Compose / emoji | Verified on `Xvfb :5` (`searlx 🙂©` with `Multi_key o c` preedit `"·" → "o" → ""`); full CJK IME daemon (IBus/Fcitx5) still needs an unlocked desktop. |
+| Frame rate during scroll or interaction | Measured on `Xvfb :5`: GTK frame clock **60.3 fps** (182 ticks / 3.016 s), in-page `requestAnimationFrame` **~62 fps** (`raf` 0 → 560 in 9 s), video **~30 fps** (`requestVideoFrameCallback` 112 frames). |
 | Wayland focus/activation | Failed in this run; likely the locked surface. Retest unlocked. |
 | Whole-window readback on Wayland | Black. Page snapshot still works. |
-| Video, fullscreen, PiP | Not tested. No video page, no unlocked display. |
+| Video, fullscreen, PiP | Local 640×360 VP9 plays (`readyState=4`, 112 decoded frames via `requestVideoFrameCallback`), DOM fullscreen toggles via `f`/`Escape`, **native PiP is absent** on WebKitGTK 2.54.2 (`pictureInPictureEnabled=false`). |
 | Accessibility tree | Not tested. |
 | macOS WKWebView embed | No macOS machine. P0-03 blocked. |
 | Windows WebView2 embed | No Windows machine. P0-04 blocked. |
-| 1 / 10 / 30 tab memory | No benchmark yet. P0-08 open. |
+| 1 / 10 / 30 tab memory | Measured on Linux X11 (400 MiB / 1.98 GiB / 5.44 GiB; §5.1); macOS/Windows comparison open. |
 
 ## 8. Capability conclusions
 

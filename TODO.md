@@ -27,14 +27,14 @@ Platform tags: `[all]`, `[mac]`, `[win]`, `[linux]`, `[mac,win]`, `[mac,linux]`.
 
 | Phase | Done | Total | Status |
 |---|---:|---:|---|
-| 0 — Feasibility spike | 5 | 13 | In progress |
+| 0 — Feasibility spike | 6 | 13 | In progress |
 | 1 — Foundation | 0 | 16 | Not started |
 | 2 — Daily driver | 0 | 23 | Not started |
 | 3 — Identity and power | 0 | 20 | Not started |
 | 4 — Platform and parity | 0 | 16 | Not started |
 | 5 — Linux and hardening | 0 | 11 | Not started |
 | Continuous | 0 | 8 | Not started |
-| **Total** | **0** | **107** | |
+| **Total** | **6** | **107** | |
 
 Gates count as tasks. The "Now" section mirrors six Phase 0 items; they are not counted twice.
 
@@ -74,10 +74,10 @@ Current focus (status lives in Phase 0 below; this is only the order):
   Embed WebView2 via `windows-rs` or `wry` behind the engine trait. Load two tabs; keep them alive. Place a gpui overlay above the page.
   **Done when:** same as P0-03 on Windows 11; note whether the WebView2 child window covers gpui overlays and what workaround is needed; record input latency.
 
-- [~] **P0-05 — Linux WebKitGTK X11 spike `[linux]`**
+- [x] **P0-05 — Linux WebKitGTK X11 spike `[linux]`**
   Embed WebKitGTK in a gpui window on X11/XWayland. Load a real page. Test overlay, focus, resize, IME, video.
   **Done when:** a real page renders and scrolls at a usable frame rate; overlays and focus are possible or the limitation is measured and written down.
-  **Notes:** gpui 0.2.2 has no Linux native-view API, so WebKitGTK cannot be embedded in a gpui window yet. The spike at `crates/searlx-engine-linux/src/bin/spike.rs` measures the GTK-shell baseline instead. Measured on X11/Xwayland: `https://example.com/` finished in 296 ms, JS `scrollTo(0,240)` returned `scrollY: 240`, `grab_focus` gave the view keyboard focus, the overlay chip was visible in the window snapshot, and WebKitNetworkProcess/WebKitWebProcess children were present. Not measured: real pointer click (the handler was called programmatically), IME/emoji, frame rate, video, resize (requested 900×620 but allocation stayed 750×981), and a11y. Evidence and exact commands are in `docs/spike/phase-0.md`. Needs a retest on an unlocked X11 display.
+  **Notes:** gpui 0.2.2 has no Linux native-view API, so WebKitGTK cannot be embedded in a gpui window yet; that limitation is measured and documented in `docs/spike/phase-0.md` and `docs/adr/0002-linux-engine.md`. The GTK-shell baseline (`spike.rs` + `interactions.rs --external`) was verified on X11 (`Xwayland :0` and `Xvfb :5` with `xdotool`): `https://example.com/` loaded in 296 ms; real X11 pointer click on the overlay chip and menu popover worked (12.0 ms and 6.1 ms to next frame); real click focused the WebView (`hasFocus=true`); real X11 wheel events scrolled `scrollY` to 468 while the GTK frame clock ran at 60.3 fps and in-page `requestAnimationFrame` ran at ~62 fps; X11 typing, emoji (`🙂`), and Compose key (`Multi_key o c` → `entry_preedit "·" → "o" → ""` → `©`) worked; window resize to `900×620` updated allocations (`900×620`, split `898×531`, 11.5 ms to next frame); local 640×360 VP9 video decoded 112 frames via `requestVideoFrameCallback` and toggled DOM fullscreen (`f`/`Escape`), while native PiP was measured absent (`pictureInPictureEnabled=false`).
 
 - [x] **P0-06 — Linux Wayland decision spike `[linux]`**
   Try the same on a native Wayland session. Compare: WebKitGTK child surface, XWayland, GTK-native shell, CEF OSR. Do not build a production integration yet.
@@ -87,7 +87,7 @@ Current focus (status lives in Phase 0 below; this is only the order):
 - [~] **P0-07 — Hard interactions prototype `[all]`**
   Build the five interactions that decide the architecture: (1) overlay menu above a page; (2) tab drag with a floating lift panel; (3) split-view divider resize; (4) IME/emoji in a page and in the field; (5) video fullscreen/PiP/floating.
   **Done when:** each interaction works or has a measured fallback; latency numbers are recorded per OS.
-  **Notes:** `crates/searlx-engine-linux/src/bin/interactions.rs` builds and programmatically drives all five in the GTK shell; results are in `docs/spike/phase-0.md` §5.2. Overlay popover opens/closes, tabs reorder and the lift panel shows/hides, split position 560→374→224 is honored at width 748, entry/page emoji work, and a local 640×360 video plays (`readyState=4`, `currentTime` advances, `paused=false`) with DOM fullscreen. **Native PiP is absent** on WebKitGTK 2.54.2 (`pictureInPictureEnabled=false`), so the Linux capability now reports `native_pip=false`. Window readback is black over the video surface. Real pointer drags, real IME composition, fullscreen via a user gesture, and floating/reparenting are still manual; no latency numbers yet. Partial, not done.
+  **Notes:** `crates/searlx-engine-linux/src/bin/interactions.rs` builds and drives all five on Linux X11 both programmatically and via real X11 input (`--external` + `xdotool` on `Xvfb :5`); results and latency numbers are in `docs/spike/phase-0.md` §5.2. Overlay click (12.0 ms to next frame), menu popover open/close (6.1 ms / 3.0 ms), real X11 tab drag reorder (0.33 ms), real X11 split divider drag `560→440` (0.05 ms) and window resize `1180×780→900×620` (11.5 ms), entry typing/emoji/Compose preedit `"searlx 🙂©"` (14.2 ms), left-page wheel scroll (`scrollY=468`, 60.3 fps GTK frame clock, ~62 fps `requestAnimationFrame`), and local 640×360 VP9 video (`readyState=4`, 112 `requestVideoFrameCallback` frames, DOM fullscreen via `f`/`Escape`) all pass on Linux X11. **Native PiP is absent** on WebKitGTK 2.54.2 (`pictureInPictureEnabled=false`, `native_pip=false`). Still needs macOS and Windows measurements (blocked on hardware).
 
 - [~] **P0-08 — Performance baseline `[all]`**
   Measure cold open, new tab, tab switch, split resize, scroll, and memory with 1/10/30 tabs. Use the same page and hardware per OS. Record in `docs/spike/phase-0.md`.
@@ -564,6 +564,7 @@ Create `docs/adr/NNNN-title.md` for each. Status: proposed/accepted/superseded.
 - **2026-11-21** — P0-06/P0-09/P0-10/P0-12 done; P0-05 partial. Linux WebKitGTK spike ran on X11/Xwayland and native Wayland: real page, JS scroll, overlay visible (X11), focus on X11, WebKit child processes, page snapshots; Wayland focus/readback failed in the locked session. gpui 0.2.2 cannot host a Linux native view, so ADR-0002 recommends a GTK-native shell (X11/XWayland first). Wrote `docs/spike/phase-0.md`, `capabilities.md`, `security-checklist.md`, ADR-0001..0008, and copied evidence PNGs. P0-G is blocked on macOS/Windows hardware and real Linux input/frame-rate checks. `cargo fmt`, `clippy -D warnings`, and `cargo test --workspace` pass; 17 tests.
 - **2026-11-21** — P0-08 baseline measured on X11. 1/10/30 local tabs: RSS 400 MiB / 1.98 GiB / 5.44 GiB, processes 3/12/35, switch avg 0.20/0.93/2.82 ms. WebKitGTK uses one WebKitWebProcess per view (~178–209 MiB), so 30 live tabs cost ~6 GiB and sleeping is mandatory. Recorded in `docs/spike/phase-0.md` §5.1; macOS/Windows comparison still open. Next: P0-07 hard interactions on the GTK shell.
 - **2026-11-21** — P0-07 partial. GTK prototype drives overlay popover, tab reorder/lift, split resize, entry/page emoji, and local video (2 pages + video, ~196 MB self RSS). Video plays and DOM fullscreen works, but native PiP is absent on WebKitGTK 2.54.2, window readback is black over video, and real pointer/IME paths still need an unlocked display. Linux `native_pip` corrected to false with a unit test. Results in `docs/spike/phase-0.md` §5.2.
+- **2026-11-21** — P0-05 done; P0-07 Linux X11 input/latency measured. Added `--external` mode and next-frame latency probes to `interactions.rs` and drove real X11 pointer, wheel, keyboard, emoji, Compose (`Multi_key`), split-drag, tab-drag, video frame counter, and window resize on `Xvfb :5` with `xdotool`. GTK frame clock: 60.3 fps; in-page `requestAnimationFrame`: ~62 fps; video decoded 112 frames; input-to-next-frame latencies 0.05–14.2 ms. Recorded in `docs/spike/phase-0.md` §5.2 and `docs/spike/evidence/x11-interactions-external.png`.
 
 ---
 

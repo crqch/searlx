@@ -1,16 +1,18 @@
 //! Phase 0 hard-interaction prototype for the Linux GTK shell (P0-07).
 //!
-//! Five interactions, exercised as far as a locked session allows:
+//! Five interactions:
 //! 1. A menu popover above a live page.
 //! 2. A tab lift panel and a notebook reorder.
 //! 3. A split view whose divider position is changed.
 //! 4. Emoji in the address field and in page text (IME itself is manual).
 //! 5. HTML video fullscreen and picture-in-picture capability.
 //!
-//! The program prints `INTERACT ...` lines and writes a window snapshot on
-//! X11. It calls the same handlers a pointer would, but a programmatic popup or
-//! `set_position` is **not** proof that a person can drag or click under the
-//! compositor. Those checks stay manual; see `docs/spike/phase-0.md`.
+//! The default mode drives the handlers directly. `--external` builds the same
+//! window but waits for real X11 input, logs widget rectangles for a driver
+//! such as `xdotool`, and samples page focus, scroll, frame, and video-frame
+//! counters. A private `Xvfb` display is enough to exercise the X11 event path
+//! without touching the locked desktop session; it is not a substitute for a
+//! person using the app on real hardware. See `docs/spike/phase-0.md`.
 
 #[cfg(not(target_os = "linux"))]
 fn main() -> std::process::ExitCode {
@@ -38,6 +40,7 @@ mod linux {
         video: Option<PathBuf>,
         window_png: PathBuf,
         seconds: u32,
+        external: bool,
     }
 
     impl Args {
@@ -46,6 +49,7 @@ mod linux {
                 video: None,
                 window_png: PathBuf::from("/tmp/searlx-interactions-window.png"),
                 seconds: 30,
+                external: false,
             };
             let mut iter = std::env::args().skip(1);
             while let Some(arg) = iter.next() {
@@ -65,11 +69,17 @@ mod linux {
                             .parse()
                             .map_err(|_| "--seconds must be a whole number")?;
                     }
+                    "--external" => args.external = true,
                     "--help" | "-h" => {
                         println!(
                             "usage: searlx-interactions-linux [--video PATH]\n\
                              \x20                                 [--window-png PATH]\n\
                              \x20                                 [--seconds N]\n\
+                             \x20                                 [--external]\n\
+                             \n\
+                             --external waits for real X11 input and logs widget\n\
+                             rectangles for xdotool. Default: drive the handlers\n\
+                             programmatically.\n\
                              \n\
                              Run on X11: GDK_BACKEND=x11 DISPLAY=:0 XDG_RUNTIME_DIR=/tmp/run-1000"
                         );
@@ -135,6 +145,19 @@ mod linux {
         entry.connect_preedit_changed(|_entry, preedit| {
             println!("INTERACT entry_preedit {preedit:?}");
         });
+        let key_window = window.clone();
+        let first_key_logged = Rc::new(Cell::new(false));
+        entry.connect_key_press_event(move |_entry, event| {
+            let key = event.keyval();
+            println!(
+                "INTERACT input entry_key key={key} unicode={:?}",
+                key.to_unicode()
+            );
+            if !first_key_logged.replace(true) {
+                log_next_frame_latency(&key_window, "entry_key");
+            }
+            glib::Propagation::Proceed
+        });
 
         let menu_button = gtk::MenuButton::new();
         menu_button.set_label("Menu");
@@ -147,6 +170,12 @@ mod linux {
         }
         popover.add(&menu);
         menu_button.set_popover(Some(&popover));
+        let menu_window = window.clone();
+        menu_button.connect_toggled(move |button| {
+            println!("INTERACT input menu_toggled active={}", button.is_active());
+            log_next_frame_latency(&menu_window, "menu_toggled");
+        });
+        popover.connect_closed(|_| println!("INTERACT input popover_closed"));
 
         let top = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         top.set_margin_top(8);
@@ -165,16 +194,23 @@ mod linux {
         paned.pack1(&left, true, true);
         paned.pack2(&right, true, true);
         paned.set_position(560);
-        paned.connect_position_notify(|paned| {
+        let split_window = window.clone();
+        let split_latency_logged = Rc::new(Cell::new(false));
+        paned.connect_position_notify(move |paned| {
             println!("INTERACT split_position position={}", paned.position());
+            if !split_latency_logged.replace(true) {
+                log_next_frame_latency(&split_window, "split_position");
+            }
         });
-        paned.connect_size_allocate(|paned, allocation| {
-            println!(
-                "INTERACT split_alloc width={} height={} position={}",
-                allocation.width(),
-                allocation.height(),
-                paned.position()
-            );
+        let last_split_alloc = Rc::new(Cell::new((0_i32, 0_i32, -1_i32)));
+        paned.connect_size_allocate(move |paned, allocation| {
+            let current = (allocation.width(), allocation.height(), paned.position());
+            if last_split_alloc.replace(current) != current {
+                println!(
+                    "INTERACT split_alloc width={} height={} position={}",
+                    current.0, current.1, current.2
+                );
+            }
         });
 
         // 2. Tab strip. The notebook can reorder tabs; the lift panel is a
@@ -191,6 +227,20 @@ mod linux {
         notebook.set_tab_reorderable(&second, true);
         notebook.set_tab_detachable(&paned, true);
         notebook.set_tab_detachable(&second, true);
+        let reorder_window = window.clone();
+        notebook.connect_page_reordered(move |_notebook, child, page_num| {
+            println!(
+                "INTERACT input tab_reordered child={} index={page_num}",
+                child.widget_name()
+            );
+            log_next_frame_latency(&reorder_window, "tab_reordered");
+        });
+        notebook.connect_switch_page(|_notebook, child, page_num| {
+            println!(
+                "INTERACT input tab_switched child={} index={page_num}",
+                child.widget_name()
+            );
+        });
 
         // The overlay chip sits above the notebook and the page.
         let overlay = gtk::Overlay::new();
@@ -201,7 +251,14 @@ mod linux {
         chip.set_margin_top(14);
         chip.set_margin_end(14);
         chip.set_relief(gtk::ReliefStyle::None);
-        chip.connect_clicked(|_| println!("INTERACT overlay_clicked"));
+        let overlay_clicks = Rc::new(Cell::new(0_u32));
+        let chip_window = window.clone();
+        chip.connect_clicked(move |_| {
+            let count = overlay_clicks.get() + 1;
+            overlay_clicks.set(count);
+            println!("INTERACT input overlay_clicked count={count}");
+            log_next_frame_latency(&chip_window, "overlay_clicked");
+        });
         overlay.add_overlay(&chip);
 
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -210,6 +267,31 @@ mod linux {
         window.add(&root);
         window.show_all();
         entry.grab_focus();
+
+        if args.external {
+            let last_window_alloc = Rc::new(Cell::new((0_i32, 0_i32)));
+            window.connect_size_allocate(move |window, allocation| {
+                let current = (allocation.width(), allocation.height());
+                let previous = last_window_alloc.replace(current);
+                if previous != current {
+                    println!(
+                        "INTERACT window_alloc width={} height={}",
+                        current.0, current.1
+                    );
+                    if previous != (0, 0) {
+                        log_next_frame_latency(window, "window_resize");
+                    }
+                }
+            });
+            window.connect_button_press_event(|_window, event| {
+                let (x, y) = event.position();
+                println!(
+                    "INTERACT input window_button x={x:.1} y={y:.1} button={}",
+                    event.button()
+                );
+                glib::Propagation::Proceed
+            });
+        }
 
         let lift = gtk::Window::new(gtk::WindowType::Popup);
         lift.set_decorated(false);
@@ -231,6 +313,9 @@ mod linux {
         let script_left = left.clone();
         let script_right = right.clone();
         let script_entry = entry.clone();
+        let script_chip = chip.clone();
+        let script_second = second.clone();
+        let external = args.external;
         let left_done = Rc::new(Cell::new(false));
         let left_done_closure = left_done.clone();
         left.connect_load_changed(move |view, event| {
@@ -251,25 +336,46 @@ mod linux {
             let left = script_left.clone();
             let right = script_right.clone();
             let entry = script_entry.clone();
+            let chip = script_chip.clone();
+            let second = script_second.clone();
             glib::timeout_add_local_once(Duration::from_millis(400), move || {
                 println!(
                     "INTERACT pages_loaded left={:?} right={:?}",
                     view.title(),
                     right.title()
                 );
-                probe_entry(&entry);
-                probe_page_emoji(&probe, &left);
-                probe_overlay(&probe, &popover, &menu_button, &window);
-                glib::timeout_add_local_once(Duration::from_millis(500), move || {
-                    probe_split(&probe, &paned);
+                log_rects(
+                    &window,
+                    &entry,
+                    &menu_button,
+                    &chip,
+                    &paned,
+                    &notebook,
+                    &second,
+                    &left,
+                    &right,
+                );
+                if external {
+                    println!("INTERACT external_ready");
+                    inject_raf_counter(&left);
+                    start_page_state(&left, "left");
+                    start_page_state(&right, "right");
+                    measure_frame_clock(&window, 3);
+                } else {
+                    probe_entry(&entry);
+                    probe_page_emoji(&probe, &left);
+                    probe_overlay(&probe, &popover, &menu_button, &window);
                     glib::timeout_add_local_once(Duration::from_millis(500), move || {
-                        probe_video(&probe, &right, &window);
-                        probe_lift(&lift, &window, &notebook);
-                        glib::timeout_add_local_once(Duration::from_millis(1500), move || {
-                            probe_finish(&probe, &window);
+                        probe_split(&probe, &paned);
+                        glib::timeout_add_local_once(Duration::from_millis(500), move || {
+                            probe_video(&probe, &right, &window);
+                            probe_lift(&lift, &window, &notebook);
+                            glib::timeout_add_local_once(Duration::from_millis(1500), move || {
+                                probe_finish(&probe, &window);
+                            });
                         });
                     });
-                });
+                }
             });
         });
 
@@ -285,6 +391,7 @@ mod linux {
         });
 
         left.load_html(&page_html("left", 180), None);
+        second.load_html(&page_html("tab", 60), None);
         match &args.video {
             Some(video) => {
                 println!("INTERACT video_page path={}", video.display());
@@ -299,10 +406,17 @@ mod linux {
         }
 
         let deadline_probe = probe.clone();
+        let deadline_window = window.clone();
         let seconds = args.seconds;
+        let external = args.external;
         glib::timeout_add_seconds_local(seconds, move || {
-            deadline_probe.fail(format!("deadline after {seconds}s"));
-            gtk::main_quit();
+            if external {
+                println!("INTERACT external_deadline seconds={seconds}");
+                probe_finish(&deadline_probe, &deadline_window);
+            } else {
+                deadline_probe.fail(format!("deadline after {seconds}s"));
+                gtk::main_quit();
+            }
             glib::ControlFlow::Break
         });
 
@@ -347,8 +461,43 @@ mod linux {
              <title>video-probe</title><style>body{{font-family:sans-serif;\
              margin:2rem}}video{{width:640px;max-width:100%;background:#000}}</style>\
              </head><body><h1>Video probe</h1>\
-             <video id=\"probe-video\" src=\"{source}\" controls autoplay loop muted></video>\
-             <p id=\"status\">waiting</p></body></html>"
+             <video id=\"probe-video\" src=\"{source}\" controls autoplay loop muted playsinline></video>\
+             <p id=\"status\">waiting</p>\
+             <script>\
+             const video = document.getElementById('probe-video');\
+             window.__searlxVideoFrames = 0;\
+             if (video.requestVideoFrameCallback) {{\
+                 const countFrame = () => {{\
+                     window.__searlxVideoFrames += 1;\
+                     video.requestVideoFrameCallback(countFrame);\
+                 }};\
+                 video.requestVideoFrameCallback(countFrame);\
+             }}\
+             const goFullscreen = () => {{\
+                 const playing = video.play();\
+                 if (playing && playing.catch) playing.catch(() => {{}});\
+                 if (video.requestFullscreen) {{\
+                     video.requestFullscreen()\
+                         .then(() => {{ document.title = 'fullscreen-ok'; }})\
+                         .catch((error) => {{\
+                             document.title = 'fullscreen-fail:' + error.name;\
+                         }});\
+                 }}
+             }};\
+             window.addEventListener('keydown', (event) => {{\
+                 window.__searlxLastKey = event.key;\
+                 if (event.key === 'f' || event.key === 'F') goFullscreen();\
+                 if (event.key === 'p' || event.key === 'P') {{\
+                     if (video.requestPictureInPicture) {{\
+                         video.requestPictureInPicture()\
+                             .then(() => {{ document.title = 'pip-ok'; }})\
+                             .catch((error) => {{ document.title = 'pip-fail:' + error.name; }});\
+                     }} else {{\
+                         document.title = 'pip-unsupported';\
+                     }}\
+                 }}\
+             }}, true);\
+             </script></body></html>"
         )
     }
 
@@ -366,6 +515,134 @@ mod linux {
              max-width:60ch;margin:2rem auto;line-height:1.5}}</style></head>\
              <body><h1>Probe {id}</h1>{body}</body></html>"
         )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn log_rects(
+        window: &gtk::Window,
+        entry: &gtk::Entry,
+        menu_button: &gtk::MenuButton,
+        chip: &gtk::Button,
+        paned: &gtk::Paned,
+        notebook: &gtk::Notebook,
+        second: &webkit2gtk::WebView,
+        left: &webkit2gtk::WebView,
+        right: &webkit2gtk::WebView,
+    ) {
+        log_rect(window, "entry", entry);
+        log_rect(window, "menu", menu_button);
+        log_rect(window, "chip", chip);
+        log_rect(window, "paned", paned);
+        log_rect(window, "left", left);
+        log_rect(window, "right", right);
+        if let Some(label) = notebook.tab_label(paned) {
+            log_rect(window, "tab-left", &label);
+        }
+        if let Some(label) = notebook.tab_label(second) {
+            log_rect(window, "tab-right", &label);
+        }
+    }
+
+    fn log_rect<W: IsA<gtk::Widget>>(window: &gtk::Window, name: &str, widget: &W) {
+        let Some((x, y)) = widget.translate_coordinates(window, 0, 0) else {
+            println!("INTERACT rect name={name} skipped=not-realized");
+            return;
+        };
+        let allocation = widget.allocation();
+        let (window_x, window_y) = window.position();
+        let width = allocation.width();
+        let height = allocation.height();
+        println!(
+            "INTERACT rect name={name} x={x} y={y} w={width} h={height} \
+             cx={} cy={} root_x={} root_y={}",
+            x + width / 2,
+            y + height / 2,
+            window_x + x,
+            window_y + y
+        );
+    }
+
+    fn inject_raf_counter(view: &webkit2gtk::WebView) {
+        view.evaluate_javascript(
+            "window.__searlxRaf = 0; \
+             (function tick() { window.__searlxRaf += 1; requestAnimationFrame(tick); })(); 1",
+            None,
+            None,
+            None::<&gtk::gio::Cancellable>,
+            |result| {
+                if let Err(error) = result {
+                    println!("INTERACT raf_inject_error {error}");
+                }
+            },
+        );
+    }
+
+    fn start_page_state(view: &webkit2gtk::WebView, label: &'static str) {
+        let view = view.clone();
+        glib::timeout_add_local(Duration::from_millis(1000), move || {
+            let script = "(() => { \
+                const v = document.querySelector('video'); \
+                return JSON.stringify({ \
+                    title: document.title, \
+                    scrollY: Math.round(window.scrollY), \
+                    scrollX: Math.round(window.scrollX), \
+                    hasFocus: document.hasFocus(), \
+                    active: document.activeElement ? document.activeElement.tagName : null, \
+                    raf: window.__searlxRaf || 0, \
+                    videoFrames: window.__searlxVideoFrames || 0, \
+                    videoTime: v ? Number(v.currentTime.toFixed(3)) : null, \
+                    videoPaused: v ? v.paused : null, \
+                    videoReady: v ? v.readyState : null, \
+                    videoError: v && v.error ? v.error.code : null, \
+                    lastKey: window.__searlxLastKey || null, \
+                    fullscreen: document.fullscreenElement != null, \
+                    pip: document.pictureInPictureElement != null \
+                }); \
+            })()";
+            view.evaluate_javascript(
+                script,
+                None,
+                None,
+                None::<&gtk::gio::Cancellable>,
+                move |result| match result {
+                    Ok(value) => println!("INTERACT page_state label={label} {value}"),
+                    Err(error) => println!("INTERACT page_state_error label={label} {error}"),
+                },
+            );
+            glib::ControlFlow::Continue
+        });
+    }
+
+    fn log_next_frame_latency(widget: &impl IsA<gtk::Widget>, kind: &'static str) {
+        let started = Instant::now();
+        widget.add_tick_callback(move |_widget, _clock| {
+            println!(
+                "INTERACT latency kind={kind} next_frame_us={}",
+                started.elapsed().as_micros()
+            );
+            glib::ControlFlow::Break
+        });
+    }
+
+    fn measure_frame_clock(widget: &impl IsA<gtk::Widget>, seconds: u64) {
+        let started = Instant::now();
+        let ticks = Rc::new(Cell::new(0_u64));
+        let tick_counter = ticks.clone();
+        widget.add_tick_callback(move |_widget, _clock| {
+            let count = tick_counter.get() + 1;
+            tick_counter.set(count);
+            let elapsed = started.elapsed();
+            if elapsed >= Duration::from_secs(seconds) {
+                println!(
+                    "INTERACT frame_clock ticks={count} elapsed_ms={} fps={:.1}",
+                    elapsed.as_millis(),
+                    count as f64 / elapsed.as_secs_f64()
+                );
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
     }
 
     fn probe_entry(entry: &gtk::Entry) {
