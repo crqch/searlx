@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=searlx
+GenericName=Web Browser
+Comment=Fast, quiet web browser using the system WebKitGTK engine
+Exec=searlx %U
+Icon=com.officecommun.searlx
+Terminal=false
+Categories=Network;WebBrowser;
+MimeType=x-scheme-handler/http;x-scheme-handler/https;text/html;application/xhtml+xml;application/pdf;
+StartupNotify=true
+StartupWMClass=searlx

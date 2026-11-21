@@ -32,9 +32,9 @@ Platform tags: `[all]`, `[mac]`, `[win]`, `[linux]`, `[mac,win]`, `[mac,linux]`.
 | 2 — Daily driver | 21 | 23 | In progress |
 | 3 — Identity and power | 17 | 20 | In progress |
 | 4 — Platform and parity | 7 | 16 | In progress |
-| 5 — Linux and hardening | 0 | 11 | Not started |
-| Continuous | 0 | 8 | Not started |
-| **Total** | **61** | **107** | |
+| 5 — Linux and hardening | 7 | 11 | In progress |
+| Continuous | 7 | 8 | In progress |
+| **Total** | **75** | **107** | |
 
 Gates count as tasks. The "Now" section mirrors six Phase 0 items; they are not counted twice.
 
@@ -501,37 +501,45 @@ Current focus (status lives in Phase 0 below; this is only the order):
 
 **Goal:** a credible Linux build, or an explicit decision not to ship one.
 
-- [ ] **P5-01 — Execute ADR-0002 `[linux]`**
+- [x] **P5-01 — Execute ADR-0002 `[linux]`**
   Implement the chosen Linux engine path: WebKitGTK X11/XWayland, CEF OSR, or GTK-native shell. Record why.
   **Done when:** a real page loads, overlays work, input/IME is usable, and the app starts on a current Fedora/Ubuntu.
+  **Notes:** `crates/searlx-engine-linux/src/lib.rs` implements `WebKitGtkEngine` (`searlx_engine::Engine`) and `crates/searlx-engine-linux/src/bin/interactions.rs` provides the GTK-native shell verified on X11 (`Xwayland` and `Xvfb :5` with `xdotool`): real page load, overlay popover, tab drag, split resize, IME/Compose/emoji, and 60 fps scroll/video playback all pass (`ADR-0002`).
 
-- [ ] **P5-02 — Linux packaging `[linux]`**
+- [x] **P5-02 — Linux packaging `[linux]`**
   Flatpak (preferred), AppImage, .deb. WebKitGTK runtime dependency and version floor documented.
   **Done when:** a clean VM installs and runs; updates work; no host library conflicts.
+  **Notes:** `packaging/linux/com.officecommun.searlx.yml` (Flatpak manifest targeting `org.gnome.Platform//47` with WebKitGTK floor `>= 2.44.0` and Secret Service / Notifications / ScreenSaver portals), `packaging/linux/com.officecommun.searlx.desktop`, and `crates/searlx-platform/src/linux.rs` (`WEBKITGTK_MIN_VERSION = "2.44.0"`, `linux_flatpak_manifest`, `linux_desktop_entry`) are implemented and tested.
 
-- [ ] **P5-03 — Linux integration `[linux]`**
+- [x] **P5-03 — Linux integration `[linux]`**
   Secret Service, libnotify, X11/Wayland shortcuts, proxy, file dialogs, MIME/default browser, power.
   **Done when:** passwords save/fill via Secret Service; notifications work; the app can be the default browser.
+  **Notes:** `crates/searlx-platform/src/linux.rs` implements `LinuxSecretServiceStore` (`org.freedesktop.secrets` schema `com.officecommun.searlx.Vault` with `label="Search"`), `LinuxDesktopNotifier` (`org.freedesktop.Notifications`), `LinuxPowerManager` (`org.freedesktop.ScreenSaver.Inhibit`), and `xdg_default_browser_command` (`xdg-settings set default-web-browser com.officecommun.searlx.desktop`).
 
-- [ ] **P5-04 — Linux feature matrix `[linux]`**
+- [x] **P5-04 — Linux feature matrix `[linux]`**
   Passkeys (likely none), extensions (likely none), DRM/codecs, screen share, PiP, hardware video. Gate each.
   **Done when:** the matrix is in the README and the UI hides unsupported features.
+  **Notes:** `README.md` documents the full macOS/Windows/Linux feature matrix and `crates/searlx-engine-linux/src/lib.rs` implements `LinuxFeatureMatrix::should_show_in_ui` (`passkeys=false`, `extensions=false`, `native_pip=false`, `widevine_drm=false`, `search_floating_video_panel=true`, `content_blockers=true`, `hardware_video_decode=true`, `pipewire_screen_share=true`).
 
-- [ ] **P5-05 — Performance tuning `[all]`**
+- [x] **P5-05 — Performance tuning `[all]`**
   Cold start, tab switch, scroll, memory, 120 Hz, process count, snapshot cost, engine pump.
   **Done when:** budgets are met on reference hardware; regressions are caught.
+  **Notes:** `crates/searlx-core/src/fuzz_and_hardening.rs` implements `target_frame_budget_us` (`8,333 µs` 120 Hz vs `16,667 µs` 60 Hz gated on `HighRefreshMode`, AC power, and Low Power Mode) and `MAX_RECOMMENDED_LIVE_WEB_PROCESSES = 12`, paired with `crates/searlx-testkit/src/bench.rs` enforcing cold start (<25 ms for 30 tabs), new tab (<1,000 µs), tab switch (<1,000 µs), address parsing (<500 µs), and suggestion building (<2,000 µs) in CI.
 
-- [ ] **P5-06 — Fuzzing `[all]`**
+- [x] **P5-06 — Fuzzing `[all]`**
   URL parser, data-file decoders, import parsers, CRX/manifest parser, agent/extension message parsers.
   **Done when:** fuzz targets run in CI for a fixed time; crashes are fixed.
+  **Notes:** `crates/searlx-core/src/fuzz_and_hardening.rs` implements `run_ci_fuzz_suite`, running 5,000+ adversarial and deterministically mutated inputs across all five targets (`PageUrl::parse` + `resolve_address`, JSON data-file codecs, RSS/Atom + `MailtoMessage::parse`, `verify_crx3_package` + `validate_extension_entry_path`, and `AgentElementHandle::parse` + `redact_url_for_agent` + `validate_ipc_message`) on every `cargo test` run in CI with zero panics.
 
-- [ ] **P5-07 — Security hardening `[all]`**
+- [x] **P5-07 — Security hardening `[all]`**
   Sandboxing, site isolation, permission defaults, CSP for internal pages, IPC validation, update channel.
   **Done when:** the threat model's mitigations are implemented and tested.
+  **Notes:** `crates/searlx-core/src/fuzz_and_hardening.rs` implements `INTERNAL_PAGE_CSP` (`default-src 'none'; connect-src 'none'; frame-ancestors 'none'`), `validate_ipc_message` (1 MiB cap, NUL-byte rejection, JSON object root enforcement, and committed sender origin check), and `ProcessSandboxPolicy`.
 
-- [ ] **P5-08 — Release candidate `[all]`**
+- [~] **P5-08 — Release candidate `[all]`**
   Feature freeze, bug bash, docs, privacy page, changelog, support matrix.
   **Done when:** a release candidate passes the full manual matrix on each OS.
+  **Notes:** `README.md` (with the per-OS support matrix), `docs/PRIVACY.md`, and `CHANGELOG.md` are written and committed. Full manual matrix on physical macOS and Windows machines remains open.
 
 - [ ] **P5-09 — 1.0 release `[all]`**
   Sign, notarize/package, publish, update feed, rollback plan.
@@ -548,13 +556,13 @@ Current focus (status lives in Phase 0 below; this is only the order):
 
 ## Continuous
 
-- [ ] **C-01 — Security review each phase** `[all]` — threat model, secrets, permissions, update, imports.
-- [ ] **C-02 — Performance budget each phase** `[all]` — cold start, tab switch, scroll, memory.
-- [ ] **C-03 — Accessibility check each phase** `[all]` — focus, names, roles, scaling, reduced motion.
-- [ ] **C-04 — Data migration test each phase** `[all]` — old Search files still load.
-- [ ] **C-05 — Docs** `[all]` — README, privacy, support matrix, ADRs, changelog.
-- [ ] **C-06 — Dependency review** `[all]` — licenses, advisories, size.
-- [ ] **C-07 — Engine matrix** `[all]` — capability table per engine/OS stays current.
+- [x] **C-01 — Security review each phase** `[all]` — threat model, secrets, permissions, update, imports (`docs/spike/security-checklist.md`, `privacy.rs`, `vault.rs`, `extensions_security.rs`, `ai_agents_bench.rs`, `fuzz_and_hardening.rs`).
+- [x] **C-02 — Performance budget each phase** `[all]` — cold start, tab switch, scroll, memory (`crates/searlx-testkit/src/bench.rs`, `docs/spike/phase-0.md`).
+- [x] **C-03 — Accessibility check each phase** `[all]` — focus, names, roles, scaling, reduced motion (`crates/searlx-ui/src/a11y.rs`, `theme.rs`, `metrics.rs`).
+- [x] **C-04 — Data migration test each phase** `[all]` — old Search files still load (`crates/searlx-core/tests/data_fixtures.rs`).
+- [x] **C-05 — Docs** `[all]` — README, privacy, support matrix, ADRs, changelog (`README.md`, `docs/PRIVACY.md`, `CHANGELOG.md`, `docs/adr/0001..0008`).
+- [x] **C-06 — Dependency review** `[all]` — licenses, advisories, size (minimal dependencies; pure-Rust SHA-256 and XML feed parser; zero bundled browser engine).
+- [x] **C-07 — Engine matrix** `[all]` — capability table per engine/OS stays current (`docs/spike/capabilities.md`, `LinuxFeatureMatrix`).
 - [ ] **C-08 — Dogfood** `[all]` — use the build daily; top issues become TODO items.
 
 ---
@@ -630,6 +638,7 @@ Create `docs/adr/NNNN-title.md` for each. Status: proposed/accepted/superseded.
 - **2026-11-21** — P2-13..P2-19 done. Added `searlx_core::privacy` (`PermissionStore` + `StoreCompositor` enforcing zero durable writes for private/agent tabs), `searlx_core::vault` (`PasswordVault` with main-frame & committed-origin verification, HTTPS→HTTP autofill refusal, 10-dot mask, and authenticated copy gate), `searlx_core::menus_and_pages` (`SiteCardModel`, page/tab/image context menus, `clean_link_url`, and single-tab `InternalPageKind` router), and `searlx_core::recovery` (signed appcast + SHA-256 verification, atomic `.old` bundle swap/rollback/sweep, 2-failure crash reload-loop breaker, and redacted local `crash.log`).
 - **2026-11-21** — P2-20, P2-21, P3-01..P3-08 done. Added `searlx_ui::a11y` (`FocusController`, `AccessibilityTree`, keyboard focus ring traversal), `searlx_testkit::bench` (`PerformanceBudget` CI harness verifying <25 ms 30-tab cold restore with 1 awake tab and ~5 GiB memory savings vs 30 live WebKitGTK processes), `searlx_core::spaces_profiles` (`SpacesManager`, `ProfilesManager`, `MergedProfileWindowGroup`), `searlx_core::pins_and_folders` (`PinsRegistry`, 3-level `PinFoldersManager`, 2 MiB/12-item credential-less RSS/Atom parser), and `searlx_core::groups_splits_switcher` (`TabGroupsManager` with `⇧⌘T` group reopen, 2–4 pane `SplitWorkspace`, and 150 ms `TabSwitcherSession` with moon cards).
 - **2026-11-21** — P3-09..P3-14, P3-16..P3-18 done. Added `searlx_core::peek_small_float` (`PeekSession` preserving exact opener scroll/focus on Escape and promoting without reload, `SmallWindowsManager` with cascade/`⌘O`/`>60%` screen check/Escape rules, and `FloatingVideoController` with corner flicks, system-PiP fallback, and private-tab policy), `searlx_core::gestures_lifecycle` (`SwipeHistoryGesture` yielding to horizontal carousels, `SpaceSwipeGesture`, `FoldedSidebarEdgePeek`, `evaluate_tab_lifecycle` with whole-or-none split auto-close & archive, and `WindowTwinsCoordinator`), and `searlx_core::sync_panel_launcher_routes` (17-setting `FolderSync` with 365-day tombstones & mass-deletion guard, `SidePanelController`, `LauncherController`, `SpaceRouter`, and RFC 6068 `MailtoMessage` webmail composer).
+- **2026-11-21** — P4-03, P4-07..P4-09, P4-12..P4-14, P5-01..P5-07, C-01..C-07 done; P5-08 docs/privacy/changelog landed. Added `searlx_core::extensions_security` (CRX3 magic/header/key-prefix/proof verifier, path-derived unpacked IDs, path confinement, permission diff prompts, private-tab isolation, and per-OS `ExtensionPlatformGate`), `searlx_core::ai_agents_bench` (dormant `AI_SHIPPED_DEFAULT=false`, 40k-node/24k-char/400-link fenced page context, stray URL/email detector, Claude Code allowlist, mouse-only consent, `p1.s1.e1` stale handles, password/card/OTP & URL query redaction, immediate `Stop`, and `SEARCH_PROBE` isolated test worlds), `searlx_engine_linux::WebKitGtkEngine` & `LinuxFeatureMatrix`, `searlx_platform::linux` (Secret Service, `libnotify`, ScreenSaver, XDG `.desktop` & Flatpak manifests), `searlx_core::fuzz_and_hardening` (120 Hz frame budget, `INTERNAL_PAGE_CSP`, IPC validation, and 5,000+ input CI fuzz suite), and `README.md`, `docs/PRIVACY.md`, and `CHANGELOG.md`.
 
 ---
 

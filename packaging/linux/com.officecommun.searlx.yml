@@ -1,0 +1,27 @@
+app-id: com.officecommun.searlx
+runtime: org.gnome.Platform
+runtime-version: '47'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: searlx
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --socket=pulseaudio
+  - --device=dri
+  - --talk-name=org.freedesktop.secrets
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.freedesktop.ScreenSaver
+modules:
+  - name: searlx
+    buildsystem: simple
+    build-commands:
+      - cargo build --release -p searlx
+      - install -Dm755 target/release/searlx /app/bin/searlx
+      - install -Dm644 packaging/linux/com.officecommun.searlx.desktop /app/share/applications/com.officecommun.searlx.desktop
+    sources:
+      - type: dir
+        path: ../..

@@ -15,6 +15,7 @@ pub mod downloads;
 pub mod error;
 pub mod extensions_security;
 pub mod find;
+pub mod fuzz_and_hardening;
 pub mod gestures_lifecycle;
 pub mod groups_splits_switcher;
 pub mod history;

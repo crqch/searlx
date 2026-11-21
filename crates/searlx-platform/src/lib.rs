@@ -9,6 +9,7 @@ use searlx_core::PageUrl;
 pub mod credentials;
 pub mod fake;
 pub mod files;
+pub mod linux;
 pub mod notifications;
 pub mod opener;
 pub mod packaging;
@@ -16,6 +17,11 @@ pub mod power;
 
 pub use credentials::{Credential, CredentialStore};
 pub use files::{FileDialog, FileFilter};
+pub use linux::{
+    LINUX_APP_ID, LinuxDesktopNotifier, LinuxPowerManager, LinuxSecretServiceStore,
+    SECRET_SERVICE_SCHEMA, WEBKITGTK_MIN_VERSION, linux_desktop_entry, linux_flatpak_manifest,
+    xdg_default_browser_command,
+};
 pub use notifications::Notifier;
 pub use opener::Opener;
 pub use packaging::{
