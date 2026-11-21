@@ -29,12 +29,12 @@ Platform tags: `[all]`, `[mac]`, `[win]`, `[linux]`, `[mac,win]`, `[mac,linux]`.
 |---|---:|---:|---|
 | 0 — Feasibility spike | 6 | 13 | In progress |
 | 1 — Foundation | 10 | 16 | In progress |
-| 2 — Daily driver | 5 | 23 | In progress |
+| 2 — Daily driver | 12 | 23 | In progress |
 | 3 — Identity and power | 0 | 20 | Not started |
 | 4 — Platform and parity | 0 | 16 | Not started |
 | 5 — Linux and hardening | 0 | 11 | Not started |
 | Continuous | 0 | 8 | Not started |
-| **Total** | **21** | **107** | |
+| **Total** | **28** | **107** | |
 
 Gates count as tasks. The "Now" section mirrors six Phase 0 items; they are not counted twice.
 
@@ -230,33 +230,40 @@ Current focus (status lives in Phase 0 below; this is only the order):
   **Done when:** a 1 GB download pauses/resumes; a POST download says it cannot pause; a private download is not listed.
   **Notes:** `crates/searlx-core/src/downloads.rs` implements `DownloadsManager` with 1 GB `GET` pause/resume, `POST`/body refusal (`"POST or form downloads cannot be paused"`), `" 2"`/`" 3"` duplicate numbering, path traversal sanitization, 50-row persistence cap, `uses_notification_center() == false`, and private downloads excluded from `listed_entries()` while counted in `global_active_progress()`.
 
-- [ ] **P2-06 — Reader `[all]`**
+- [x] **P2-06 — Reader `[all]`**
   Extraction heuristic, Markdown twin, light/dark/system, images/tables/code, reload on exit.
   **Done when:** 10 representative articles render cleanly; a code-heavy page keeps its code; exiting restores the page.
+  **Notes:** `crates/searlx-core/src/reader.rs` implements `extract_article` (link-density penalty heuristic, `<link rel="alternate" type="text/markdown">` & `.md` Markdown twin rendering, `<pre><code>` and `<div class="table-wrap"><table>` preservation, `<script>`/`<style>` removal), `ReaderArticle::render_document` (`38em`, `18px/1.72` serif, light/dark/system themes), and `exit_reader` reload action. Verified against 10 representative articles.
 
-- [ ] **P2-07 — Blocking `[all]`**
+- [x] **P2-07 — Blocking `[all]`**
   Content blocker rules (WebKit format), YouTube ads, per-site pause, first-load wait, cosmetic selectors. Windows/Linux adapters behind capability.
   **Done when:** a tracker-heavy page is lighter; YouTube ads are removed or the fallback mutes/skips; per-site off works.
+  **Notes:** `crates/searlx-core/src/blocking.rs` provides `TRACKER_DOMAINS` (36 ad/analytics networks), `COSMETIC_AD_SELECTORS`, `compile_webkit_content_rules` (emitting `WKContentRuleList` JSON with `unless-domain` per-site pause), `should_block_third_party_request` (portable Windows/Linux request filter), `youtube_ad_scripts` (page-world player response scrubber + isolated-world 16× mute fallback without seeking), and `FIRST_LOAD_BLOCKER_WAIT_MS` (1,000 ms).
 
-- [ ] **P2-08 — Hide elements `[all]`**
+- [x] **P2-08 — Hide elements `[all]`**
   Picker, selector synthesis, per-site list, before-first-paint injection, undo, review, private memory-only.
   **Done when:** hiding a cookie banner survives reload with no flash; review restores one/all.
+  **Notes:** `crates/searlx-core/src/blocking.rs` implements `synthesize_selector` (`#id` → `data-testid`/`aria-label`/`name`/`role` → stable classes → `nth-of-type` path) and `HideElementsManager` with before-first-paint individual `selector { display:none !important }` rules, `"Hidden — ⌘Z puts it back"` undo stack, restore one/all (`⇧⌘U`), `hidden.json` persistence, and memory-only private-tab rules.
 
-- [ ] **P2-09 — Site CSS `[all]`**
+- [x] **P2-09 — Site CSS `[all]`**
   CSS editor, live apply, per-site file, before-paint style, off keeps styles, private read-only.
   **Done when:** a site style survives reload; no script is executed.
+  **Notes:** `crates/searlx-core/src/blocking.rs` implements `SiteCssManager` and `sanitize_user_css` (blocking `</style`, `<script`, `javascript:`, `expression(`). Turning `sites.styles` off disables injection while keeping stored styles; private tabs wear existing styles but cannot edit them.
 
-- [ ] **P2-10 — Darkening `[all]`**
+- [x] **P2-10 — Darkening `[all]`**
   Measurement, dark twins/filter fallback, per-site toggle, pause, private page-only, budgets.
   **Done when:** a light article darkens without touching photos; a dark site is untouched; budget gives up cleanly.
+  **Notes:** `crates/searlx-core/src/page_tools.rs` implements `is_measured_light_page`, `DuskBudget` (2,000 sheets, 8M held chars, 48M made chars), `DuskController` (per-site `⇧⌘D`, session-wide `⌥⇧⌘D` pause, private memory-only), relative OKLCH dark twins with `img, picture, video, canvas { filter: none !important }`, and automatic fallback to `DUSK_FILTER_FALLBACK_CSS` when a budget ceiling is exceeded.
 
-- [ ] **P2-11 — Translate `[all]`**
+- [x] **P2-11 — Translate `[all]`**
   On-device where available; target/always lists; DOM text nodes/attributes; frames; show original; private.
   **Done when:** a French article translates in place; no element is added/removed; Show Original restores exact text.
+  **Notes:** `crates/searlx-core/src/page_tools.rs` implements `TranslatableNode` (excluding `code`, `pre`, `textarea`, `translate="no"`, `.notranslate`, and preserving `[1]`/`[2]` inline markers) and `TranslationManager` (in-place deduplicated translation, `show_original` exact text restoration, and private-tab `translate.always` guard).
 
-- [ ] **P2-12 — Capture `[all]`**
+- [x] **P2-12 — Capture `[all]`**
   Area, element, whole page, clipboard + PNG, limits, private transient, no upload.
   **Done when:** a 20,000 pt page captures without a white strip; an element capture outlines correctly.
+  **Notes:** `crates/searlx-core/src/page_tools.rs` implements `plan_page_capture` with 30,000 pt height cap, 64M pixel cap, 2×2 pt minimum, PDF-first rasterization for whole-page shots (avoiding off-screen white strips), `<tag> · W×H` element outline labels, site-neutral `Capture YYYY-MM-DD at HH.MM.SS.png` naming, local-only clipboard flag, and `clipboard_transient=true` for private tabs.
 
 - [ ] **P2-13 — Site card `[all]`**
   Connection, certificate, copy/print, zoom, blocker, permissions, autoplay, float-off, darken, keep-awake.
@@ -586,6 +593,7 @@ Create `docs/adr/NNNN-title.md` for each. Status: proposed/accepted/superseded.
 - **2026-11-21** — P1-03, P1-07 done. Added redacted golden event transcript assertions in `searlx-testkit` (`tests/fixtures/lifecycle.transcript`) and full `FEATURES.md` §4.2–4.4 address parsing, IDN look-alike defence, search engines, 16 site searches, inline completion, and suggestion ranking in `searlx_core::address`, wired into `searlx-ui`.
 - **2026-11-21** — P1-08, P1-09, P1-10, P1-11, P1-12 done; P1-06 core+UI landed. Added `searlx_core::session` (asleep restore, 30-tab <10 ms restore, fresh-start mode, private-tab filtering, corrupt-file quarantine), `searlx_core::settings` (typed settings, 11 `search://settings/<slug>` pages, synonym search with parent-dimming), `searlx_core::commands` (`CommandRegistry`, `⌘S` folds sidebar, conflict & reserved-key rejection), `searlx_core::import` (`O_NOFOLLOW`, symlink rejection, 64 MiB cap, asleep tab import, idempotent merge), `searlx_core::tabs` (`TabModel` + unified `DragSession`), and high-contrast/reduce-motion/1x-2x icon helpers in `searlx-ui`.
 - **2026-11-21** — P2-01..P2-05 done; P1-13 packaging skeleton landed. Added `searlx_core::navigation` (50-link session stack, redirect collapse, swipe-hold 8-item menu, internal-page trail, in-page error model), `searlx_core::find` (`"3 of 17"` / `"1 of 1,000+"` status strings, 1,000 cap, PDF whole-words fallback, Settings-tab routing), `searlx_core::history` (2,000/2,250 caps, day grouping, full clear side effects), `searlx_core::bookmarks` (1,500-bookmark tree, cycle-safe move, remove count, no export writer), and `searlx_core::downloads` (1 GB GET pause/resume, POST pause refusal, duplicate numbering, private unlisted).
+- **2026-11-21** — P2-06..P2-12 done. Added `searlx_core::reader` (10-article extraction heuristic, Markdown twins, 38em serif template, reload on exit), `searlx_core::blocking` (`WKContentRuleList` compiler, 36 tracker domains, YouTube ad scripts, Hide Elements selector synthesis & before-first-paint CSS, Site CSS sanitizer & private read-only guard), and `searlx_core::page_tools` (Dusk 2,000-sheet/8M/48M budgets & filter fallback, in-place Translation with Show Original, and 30,000 pt / 64M-pixel Page Capture planner).
 
 ---
 
