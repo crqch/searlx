@@ -28,13 +28,13 @@ Platform tags: `[all]`, `[mac]`, `[win]`, `[linux]`, `[mac,win]`, `[mac,linux]`.
 | Phase | Done | Total | Status |
 |---|---:|---:|---|
 | 0 — Feasibility spike | 6 | 13 | In progress |
-| 1 — Foundation | 0 | 16 | Not started |
+| 1 — Foundation | 3 | 16 | In progress |
 | 2 — Daily driver | 0 | 23 | Not started |
 | 3 — Identity and power | 0 | 20 | Not started |
 | 4 — Platform and parity | 0 | 16 | Not started |
 | 5 — Linux and hardening | 0 | 11 | Not started |
 | Continuous | 0 | 8 | Not started |
-| **Total** | **6** | **107** | |
+| **Total** | **9** | **107** | |
 
 Gates count as tasks. The "Now" section mirrors six Phase 0 items; they are not counted twice.
 
@@ -124,13 +124,15 @@ Current focus (status lives in Phase 0 below; this is only the order):
 
 **Goal:** a real two-platform browser skeleton with tabs, a field, a session, and settings.
 
-- [ ] **P1-01 — `searlx-core` domain types `[all]`**
+- [x] **P1-01 — `searlx-core` domain types `[all]`**
   URLs/identity, `TabId`, `SpaceId`, `ProfileId`, history visit, bookmark tree, pin, group, split, session shape, permission key, engine id. No I/O.
   **Done when:** unit tests cover URL identity, migrations, and serialization.
+  **Notes:** `crates/searlx-core/src/domain.rs` defines `EngineId`, `PermissionKind`, `PermissionDecision`, `PermissionKey` (`capture.<origin>|<kind>` with default-port disagreement detection), `HistoryVisit` (URL identity merging), `BookmarkItem`/`BookmarkTree` (link counting and non-destructive merge), `PinItem` (home/wandered/rehome), `TabGroupItem`/`SpaceColor`, `SplitAxis`/`SplitItem` (2–4 panes, 20–80% / ≥10% share clamping, swap/add/remove), and `SessionShape`/`TabSnapshot` (v0→v3 migration, active-tab wake, future-version rejection). Unit tests pass.
 
-- [ ] **P1-02 — Data stores and migrations `[all]`**
+- [x] **P1-02 — Data stores and migrations `[all]`**
   Read/write the existing JSON formats from FEATURES.md §25. Atomic temp+rename writes, serialized writes, quarantine on bad decode, versioned schema.
   **Done when:** the P0-11 fixture round-trips byte-equivalently where expected and old files load.
+  **Notes:** `crates/searlx-core/src/data/store.rs` provides `DataStore` with mutex-serialized atomic writes, `read_or_default` corrupt-file quarantine fallback, versioned migration (`migrate_session_file`, `migrate_bookmarks_file`), disk caps (2,000 history visits, 500 archived tabs, 50 downloads), schemas for all `FEATURES.md` §25 files (`profiles.json`, `archive.json`, `downloads.json`, `pin-folders.json`, `search-sites.json`), and one-time `"Office Browser"` → `"Search"` directory migration. `skip_serializing_if = "Option::is_none"` prevents spurious nulls; all 9 P0-11 legacy fixtures preserve exact JSON values and round-trip byte-equivalently (`tests/data_fixtures.rs`).
 
 - [ ] **P1-03 — Engine trait and events `[all]`**
   Finalise `Engine`, `TabOptions`, `EngineEvent`, `Capabilities`, `DataStoreHandle`, `ScriptWorld`, `InjectAt`, `FindOptions`, `FindState`. Add a fake engine for tests.
@@ -176,9 +178,10 @@ Current focus (status lives in Phase 0 below; this is only the order):
   macOS `.app` bundle + ad-hoc signing; Windows `.exe` + WebView2 runtime check; dev run command. No notarization yet.
   **Done when:** a fresh machine can run the build; the macOS bundle opens; Windows shows a clear message if WebView2 is missing.
 
-- [ ] **P1-14 — CI `[all]`**
+- [x] **P1-14 — CI `[all]`**
   GitHub Actions: fmt, clippy, test, build on macOS/Windows/Linux; cache Rust; artifact upload. Keep Linux non-blocking until Phase 5.
   **Done when:** a PR gets a green/red signal; test time is reasonable; warnings are denied.
+  **Notes:** `.github/workflows/ci.yml` runs `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, and `cargo build --workspace --bins` with `RUSTFLAGS=-Dwarnings`, `Swatinem/rust-cache@v2`, and `actions/upload-artifact@v4` on `macos-latest`, `windows-latest`, and `ubuntu-24.04` (`continue-on-error: true` on Linux until Phase 5).
 
 - [ ] **P1-15 — Phase 1 dogfood `[all]`**
   Use it for a day: open 10 sites, switch tabs, restore, search, bookmark, download. File every issue as a TODO item.
@@ -565,6 +568,7 @@ Create `docs/adr/NNNN-title.md` for each. Status: proposed/accepted/superseded.
 - **2026-11-21** — P0-08 baseline measured on X11. 1/10/30 local tabs: RSS 400 MiB / 1.98 GiB / 5.44 GiB, processes 3/12/35, switch avg 0.20/0.93/2.82 ms. WebKitGTK uses one WebKitWebProcess per view (~178–209 MiB), so 30 live tabs cost ~6 GiB and sleeping is mandatory. Recorded in `docs/spike/phase-0.md` §5.1; macOS/Windows comparison still open. Next: P0-07 hard interactions on the GTK shell.
 - **2026-11-21** — P0-07 partial. GTK prototype drives overlay popover, tab reorder/lift, split resize, entry/page emoji, and local video (2 pages + video, ~196 MB self RSS). Video plays and DOM fullscreen works, but native PiP is absent on WebKitGTK 2.54.2, window readback is black over video, and real pointer/IME paths still need an unlocked display. Linux `native_pip` corrected to false with a unit test. Results in `docs/spike/phase-0.md` §5.2.
 - **2026-11-21** — P0-05 done; P0-07 Linux X11 input/latency measured. Added `--external` mode and next-frame latency probes to `interactions.rs` and drove real X11 pointer, wheel, keyboard, emoji, Compose (`Multi_key`), split-drag, tab-drag, video frame counter, and window resize on `Xvfb :5` with `xdotool`. GTK frame clock: 60.3 fps; in-page `requestAnimationFrame`: ~62 fps; video decoded 112 frames; input-to-next-frame latencies 0.05–14.2 ms. Recorded in `docs/spike/phase-0.md` §5.2 and `docs/spike/evidence/x11-interactions-external.png`.
+- **2026-11-21** — P1-01, P1-02, P1-14 done. Added `searlx_core::domain` (`EngineId`, `PermissionKey`, `HistoryVisit`, `BookmarkTree`, `PinItem`, `TabGroupItem`, `SplitItem`, `SessionShape`), `searlx_core::data::store::DataStore` with serialized atomic writes, schema migrations, and byte-equivalent round-trip tests on all 9 legacy fixtures, and `.github/workflows/ci.yml` for macOS/Windows/Linux. Note: Phase 1 platform-independent and Linux-verifiable items proceed while `P0-G` remains `[!]` awaiting physical macOS/Windows hardware.
 
 ---
 

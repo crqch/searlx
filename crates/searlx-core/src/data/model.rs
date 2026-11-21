@@ -55,13 +55,13 @@ pub struct SessionTab {
     pub muted: bool,
     #[serde(default)]
     pub sleeping: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub space: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scroll: Option<ScrollPosition>,
     #[serde(flatten)]
     pub extra: Extra,
@@ -187,11 +187,11 @@ pub struct Pin {
     pub title: String,
     #[serde(default)]
     pub letter: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub home: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub row: Option<u32>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub space: Option<String>,
     #[serde(default)]
     pub shared: bool,
@@ -221,7 +221,7 @@ pub struct LiveFeed {
     pub url: String,
     #[serde(default)]
     pub title: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refreshed_at: Option<String>,
     #[serde(default)]
     pub posts: Vec<FeedPost>,
@@ -236,7 +236,7 @@ pub struct FeedPost {
     pub title: String,
     #[serde(default)]
     pub url: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub published: Option<String>,
     #[serde(flatten)]
     pub extra: Extra,
@@ -264,16 +264,16 @@ pub struct Space {
     pub color: String,
     #[serde(default)]
     pub icon: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gradient: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strength: Option<f64>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
     /// `own`, `shared`, or a profile UUID.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub store_sharing: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub downloads_folder: Option<String>,
     #[serde(flatten)]
     pub extra: Extra,
@@ -300,12 +300,12 @@ pub struct BookmarkNode {
     #[serde(default)]
     pub title: String,
     /// Present on links, absent on folders.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// `folder` or `bookmark`, when the old file stored a discriminator.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<BookmarkNode>,
     #[serde(flatten)]
     pub extra: Extra,
@@ -316,7 +316,7 @@ pub struct BookmarkNode {
 pub struct ImportMark {
     #[serde(default)]
     pub source: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub imported_at: Option<String>,
     #[serde(default)]
     pub count: usize,
@@ -342,13 +342,13 @@ pub struct Visit {
     pub title: String,
     #[serde(default)]
     pub visit_count: u32,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_visit: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_visit: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub space: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
     #[serde(flatten)]
     pub extra: Extra,
@@ -369,9 +369,9 @@ pub struct HiddenFile {
 pub struct HiddenSelector {
     #[serde(default)]
     pub selector: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created: Option<String>,
     #[serde(flatten)]
     pub extra: Extra,
@@ -394,8 +394,121 @@ pub struct SiteStyle {
     pub css: String,
     #[serde(default)]
     pub enabled: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated: Option<String>,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+/// One `profiles.json` file (`FEATURES.md` §25).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProfilesFile {
+    #[serde(default)]
+    pub profiles: Vec<ProfileRecord>,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+/// A persisted profile record.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProfileRecord {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub home_space: Option<String>,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+/// One `archive.json` or `archive-<profile>.json` file (`FEATURES.md` §10, §25).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ArchiveFile {
+    #[serde(default)]
+    pub tabs: Vec<ArchivedTab>,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+/// A tab closed automatically by tab lifecycle rules (`FEATURES.md` §10).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ArchivedTab {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub closed_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+/// One `downloads.json` file, capped at 50 rows (`FEATURES.md` §11, §25).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DownloadsFile {
+    #[serde(default)]
+    pub downloads: Vec<DownloadRecord>,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+/// One remembered download row (never includes private-tab downloads).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DownloadRecord {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub file_name: String,
+    #[serde(default)]
+    pub destination: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_url: Option<String>,
+    #[serde(default)]
+    pub bytes_received: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_bytes: Option<u64>,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+/// One `pin-folders.json` file (`FEATURES.md` §7.2, §7.3, §25).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PinFoldersFile {
+    #[serde(default)]
+    pub folders: Vec<PinFolder>,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+/// One `search-sites.json` file for learned OpenSearch engines (`FEATURES.md` §4.4, §25).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SearchSitesFile {
+    #[serde(default)]
+    pub sites: Vec<SiteSearchRecord>,
+    #[serde(flatten)]
+    pub extra: Extra,
+}
+
+/// A learned or custom site search template.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct SiteSearchRecord {
+    #[serde(default)]
+    pub host: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keyword: Option<String>,
+    #[serde(default)]
+    pub template: String,
     #[serde(flatten)]
     pub extra: Extra,
 }

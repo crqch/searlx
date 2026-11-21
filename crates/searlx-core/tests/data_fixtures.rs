@@ -5,9 +5,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use searlx_core::data::{
-    BookmarksFile, DataError, HiddenFile, HistoryFile, PinsFile, SessionFile, SpacesFile,
-    StylesFile, WindowsFile, read_json,
+    BookmarksFile, DataError, DataStore, HiddenFile, HistoryFile, PinsFile, SessionFile,
+    SpacesFile, StylesFile, WindowsFile, read_json, write_json,
 };
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 fn legacy(name: &str) -> PathBuf {
@@ -142,4 +144,81 @@ fn missing_file_is_not_quarantined() {
         .expect("list directory")
         .count();
     assert_eq!(entries, 0);
+}
+
+fn assert_byte_equivalent_round_trip<T>(fixture_name: &str)
+where
+    T: DeserializeOwned + Serialize + PartialEq + std::fmt::Debug,
+{
+    let source_path = legacy(fixture_name);
+    let parsed: T = read_json(&source_path).expect("parse fixture");
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let first_out = temp.path().join(format!("first-{fixture_name}"));
+    let second_out = temp.path().join(format!("second-{fixture_name}"));
+
+    write_json(&first_out, &parsed).expect("first write");
+    let first_text = fs::read_to_string(&first_out).expect("read first text");
+    assert!(
+        !first_text.contains(": null"),
+        "fixture {fixture_name} must not inject null fields when written"
+    );
+
+    let reparsed: T = read_json(&first_out).expect("reparse first write");
+    assert_eq!(reparsed, parsed);
+    write_json(&second_out, &reparsed).expect("second write");
+
+    let first_bytes = fs::read(&first_out).expect("read first bytes");
+    let second_bytes = fs::read(&second_out).expect("read second bytes");
+    assert_eq!(
+        first_bytes, second_bytes,
+        "fixture {fixture_name} must round-trip byte-equivalently"
+    );
+}
+
+#[test]
+fn all_nine_legacy_fixtures_round_trip_byte_equivalently() {
+    assert_byte_equivalent_round_trip::<SessionFile>("session.json");
+    assert_byte_equivalent_round_trip::<SessionFile>(
+        "session-7f3c2a10-3b1d-4f61-9a5e-1d2c3b4a5f60.json",
+    );
+    assert_byte_equivalent_round_trip::<WindowsFile>("windows.json");
+    assert_byte_equivalent_round_trip::<PinsFile>("pins.json");
+    assert_byte_equivalent_round_trip::<SpacesFile>("spaces.json");
+    assert_byte_equivalent_round_trip::<BookmarksFile>("bookmarks.json");
+    assert_byte_equivalent_round_trip::<HistoryFile>("history.json");
+    assert_byte_equivalent_round_trip::<HiddenFile>("hidden.json");
+    assert_byte_equivalent_round_trip::<StylesFile>("styles.json");
+
+    // Also verify loading through DataStore
+    let store = DataStore::new(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/legacy"));
+    assert_eq!(
+        store.load_session(None).expect("load session").tabs.len(),
+        2
+    );
+    assert_eq!(
+        store
+            .load_session(Some("7f3c2a10-3b1d-4f61-9a5e-1d2c3b4a5f60"))
+            .expect("load work session")
+            .tabs
+            .len(),
+        1
+    );
+    assert_eq!(
+        store
+            .load_bookmarks(None)
+            .expect("load bookmarks")
+            .roots
+            .len(),
+        1
+    );
+    assert_eq!(store.load_windows().expect("load windows").windows.len(), 1);
+    assert_eq!(store.load_pins().expect("load pins").spaces.len(), 2);
+    assert_eq!(store.load_spaces().expect("load spaces").spaces.len(), 2);
+    assert_eq!(
+        store.load_history(None).expect("load history").visits.len(),
+        2
+    );
+    assert_eq!(store.load_hidden().expect("load hidden").sites.len(), 2);
+    assert_eq!(store.load_styles().expect("load styles").sites.len(), 2);
 }
