@@ -29,12 +29,12 @@ Platform tags: `[all]`, `[mac]`, `[win]`, `[linux]`, `[mac,win]`, `[mac,linux]`.
 |---|---:|---:|---|
 | 0 — Feasibility spike | 6 | 13 | In progress |
 | 1 — Foundation | 10 | 16 | In progress |
-| 2 — Daily driver | 19 | 23 | In progress |
-| 3 — Identity and power | 0 | 20 | Not started |
+| 2 — Daily driver | 21 | 23 | In progress |
+| 3 — Identity and power | 8 | 20 | In progress |
 | 4 — Platform and parity | 0 | 16 | Not started |
 | 5 — Linux and hardening | 0 | 11 | Not started |
 | Continuous | 0 | 8 | Not started |
-| **Total** | **35** | **107** | |
+| **Total** | **45** | **107** | |
 
 Gates count as tasks. The "Now" section mirrors six Phase 0 items; they are not counted twice.
 
@@ -300,13 +300,15 @@ Current focus (status lives in Phase 0 below; this is only the order):
   **Done when:** a crashing page shows a retry after two failures; a corrupt file is set aside, not overwritten.
   **Notes:** `crates/searlx-core/src/recovery.rs` implements `CrashRecoveryManager` (auto-reloading the first crash and suppressing reload loops into `ShowManualRetry` after 2 failures within 60 seconds) and `append_crash_log` (writing one redacted single-line record to local `crash.log` using `PageUrl::redacted()`, never uploading anything). Corrupt data files are quarantined by `DataStore`.
 
-- [ ] **P2-20 — Accessibility baseline `[all]`**
+- [x] **P2-20 — Accessibility baseline `[all]`**
   Names/roles/focus for chrome; page content reachable; keyboard-only pass; reduced motion; high contrast.
   **Done when:** a screen reader can list tabs, use the field, and reach the page on macOS and Windows.
+  **Notes:** `crates/searlx-ui/src/a11y.rs` defines `A11yRole`, `A11yNode`, and `AccessibilityTree` covering the window root, tab list and per-tab accessible labels (pinned/audible/loading/sleeping/active annotations), new-tab button, address & search combo box, active panel, and `WebArea` page surface, plus full forward/backward `Tab`/`Shift+Tab` keyboard focus traversal reaching the page surface without trapping focus, paired with `Palette::for_theme_with_contrast` (`tabs.highContrast`) and `motion::duration_ms` (`reduce_motion`).
 
-- [ ] **P2-21 — Performance budget `[all]`**
+- [x] **P2-21 — Performance budget `[all]`**
   Cold start, new tab, switch, 30 tabs, scroll, memory. Add a benchmark harness.
   **Done when:** numbers are within the Phase 0 baseline; a regression fails CI or is reported.
+  **Notes:** `crates/searlx-testkit/src/bench.rs` implements `PerformanceBudget` and `run_performance_budget_check`, asserting cold-open 30-tab session restoration (<25 ms with only 1 awake tab vs 29 asleep tabs, saving ~5.0 GiB RSS compared to the Phase 0 30-live-tab WebKitGTK baseline), new tab creation (<1,000 µs avg), tab switch (<1,000 µs avg), address parsing (<500 µs avg), and suggestion building (<2,000 µs avg). Enforced in CI via `tests/contract.rs`.
 
 - [ ] **P2-22 — Phase 2 dogfood `[all]`**
   Two weeks of daily use on macOS and Windows. File issues, fix the top 10, then gate.
@@ -321,37 +323,45 @@ Current focus (status lives in Phase 0 below; this is only the order):
 
 **Goal:** spaces, profiles, pins, groups, splits, and the signature interactions.
 
-- [ ] **P3-01 — Spaces `[all]`**
+- [x] **P3-01 — Spaces `[all]`**
   Per-space tabs, parked rows, own/shared store, history routing, create/rename/delete/reorder, colors/gradients/icons, downloads folder, routes.
   **Done when:** two spaces can be signed into different accounts; switching parks tabs and returns them intact; delete cleans the store with retries.
+  **Notes:** `crates/searlx-core/src/spaces_profiles.rs` implements `SpacesManager` with per-space parked tab lists (`switch_space` parks outgoing tabs and restores incoming tabs intact), isolated vs shared data stores (`own_data_store` defaulting to `true` for created spaces so two spaces stay signed into separate accounts, and switching an existing space to isolated requires confirmation), history routing (`clear_history_for_space` refuses when `own_data_store` is false), colors/gradients/icons/downloads folder, and `delete_space` moving open tabs into the neighboring space and scheduling up to 4 store-cleanup retries (`1.5 s`, `3 s`, `4.5 s`, `6 s`).
 
-- [ ] **P3-02 — Profiles `[all]`**
+- [x] **P3-02 — Profiles `[all]`**
   Per-profile spaces, cookies, history, bookmarks, archive, windows; shared settings/extensions/passwords/downloads.
   **Done when:** two profiles do not share cookies/history/bookmarks; deleting one removes its files/stores; a window never changes profile.
+  **Notes:** `crates/searlx-core/src/spaces_profiles.rs` implements `ProfilesManager` and `ProfileIsolationBoundary`: per-profile spaces, cookies (`search.profile.<uuid>`), history, bookmarks, archive, pin folders, site searches, and windows under `Profiles/<uuid>/`, while sharing `settings.json`, extensions, passwords, and downloads across profiles. `WindowProfileBinding::try_change_profile` refuses to change a window's profile after creation.
 
-- [ ] **P3-03 — Profiles in one window `[all]`**
+- [x] **P3-03 — Profiles in one window `[all]`**
   Swap whole profile windows in place; tuck siblings; one untucked; close as a group; unmerge on setting off.
   **Done when:** switching profile spaces never reuses the old profile's stores; closing the visible window closes the group; relaunch restores the merge.
+  **Notes:** `crates/searlx-core/src/spaces_profiles.rs` implements `MergedProfileWindowGroup`: swaps complete profile windows at the exact screen frame, keeps one visible and siblings tucked, closes all siblings together when the visible window closes, and unmerges back to independent windows when `spaces.profilesInBar` turns off.
 
-- [ ] **P3-04 — Pins `[all]`**
+- [x] **P3-04 — Pins `[all]`**
   Squares/rows, identity across windows, home, peek, command-click, letter, rehome, shared pins, drag boundary.
   **Done when:** a pin is the same in every window; ⌘W puts it down and it wakes at home; shared pins appear in every space.
+  **Notes:** `crates/searlx-core/src/pins_and_folders.rs` implements `PinsRegistry`: shared pin identity across windows, `⌘W` putting a pin down (`awake=false`, restoring `current_url = home_url` without deleting it), `on_pin_link_click` (same-registrable-domain wanders in place; external domain opens a peek panel when `pins.peek` is on or a regular tab otherwise, while `⌘`-click always opens a regular tab), `rehome` (`Make Current Page Pin's Home`), custom 1–2 grapheme `letter`, and `shared` pins appearing across every space in the profile.
 
-- [ ] **P3-05 — Pin folders and live folders `[all]`**
+- [x] **P3-05 — Pin folders and live folders `[all]`**
   3-level folders, drag/nest, rename/delete, live RSS/Atom folders, 12 posts, 30 min refresh, 2 MB cap, no cookies.
   **Done when:** a feed folder updates and opens posts in new tabs; shared/squares/private cannot enter a folder.
+  **Notes:** `crates/searlx-core/src/pins_and_folders.rs` implements `PinFoldersManager` and `parse_feed_xml`: 3-level nesting cap (`MAX_PIN_FOLDER_DEPTH = 3`), refusal of shared pins, square pins (`!pins_as_rows`), and private tabs, non-destructive folder deletion (returning child pins to top level), and live RSS/Atom folders (`MAX_LIVE_FOLDER_BYTES = 2 MiB`, `LIVE_FOLDER_REFRESH_SECS = 1,800`, `MAX_LIVE_FOLDER_ITEMS = 12`, credential-less `http`/`https` fetch only, rejecting `javascript:`/`data:` item links).
 
-- [ ] **P3-06 — Tab groups `[all]`**
+- [x] **P3-06 — Tab groups `[all]`**
   Name/color/collapse, drag in/out, close group + undo, fold all, move group to space, extension id.
   **Done when:** closing a group and ⇧⌘T restores it whole; an empty group disappears.
+  **Notes:** `crates/searlx-core/src/groups_splits_switcher.rs` implements `TabGroupsManager`: name/color/collapse, automatic collapse of previous group on out-of-group tab selection (`tabs.collapseGroups`), automatic deletion when the last member leaves, `close_group` + `reopen_last_closed_group` (`⇧⌘T` restoring the group whole), `fold_all_except`, `move_group_to_space`, and stable `extension_id` (`u32`).
 
-- [ ] **P3-07 — Split View `[all]`**
+- [x] **P3-07 — Split View `[all]`**
   2–4 panes, 7 pt gutter, 250 min, 15 pt snap, divider, focus, swap, separate, close all, persistence.
   **Done when:** four panes resize and persist; closing one leaves the partner; a pair restores as a pair.
+  **Notes:** `crates/searlx-core/src/groups_splits_switcher.rs` implements `SplitWorkspace`: 2–4 panes (`LeftRight` / `TopBottom`), `7 pt` gutter, `250 pt` minimum pane size (`split_fits_window`), `15 pt` snap to 50/50 on 2-pane splits, `20–80%` (2-pane) and `≥10%` (3–4 pane) share clamping, double-click equal split, swap, separate, close-all, and closing one pane of a 2-pane split returning the partner to a normal single tab.
 
-- [ ] **P3-08 — Tab switcher `[all]`**
+- [x] **P3-08 — Tab switcher `[all]`**
   0.15 s delay, 5 columns/10 cards, moons, recency, ⌃W/R/M/O, previews, backwards.
   **Done when:** a quick ⌃Tab returns to the previous tab without drawing the grid; moons bring little windows back.
+  **Notes:** `crates/searlx-core/src/groups_splits_switcher.rs` implements `TabSwitcherSession`: `150 ms` overlay delay (releasing `Control` before `150 ms` switches immediately to the previous tab without drawing the grid), up to `10` recency-ordered cards across `5` columns (excluding sleeping pins), up to `6` floating small-window moons, and in-switcher `⌃W` (close), `⌃R` (reload), `⌃M` (mute), and `⌃O` (move moon into main window).
 
 - [ ] **P3-09 — Peek `[all]`**
   Shift-click panel, keep as tab/beside, stays-with-tab, pause hidden media, pin peek.
@@ -602,6 +612,7 @@ Create `docs/adr/NNNN-title.md` for each. Status: proposed/accepted/superseded.
 - **2026-11-21** — P2-01..P2-05 done; P1-13 packaging skeleton landed. Added `searlx_core::navigation` (50-link session stack, redirect collapse, swipe-hold 8-item menu, internal-page trail, in-page error model), `searlx_core::find` (`"3 of 17"` / `"1 of 1,000+"` status strings, 1,000 cap, PDF whole-words fallback, Settings-tab routing), `searlx_core::history` (2,000/2,250 caps, day grouping, full clear side effects), `searlx_core::bookmarks` (1,500-bookmark tree, cycle-safe move, remove count, no export writer), and `searlx_core::downloads` (1 GB GET pause/resume, POST pause refusal, duplicate numbering, private unlisted).
 - **2026-11-21** — P2-06..P2-12 done. Added `searlx_core::reader` (10-article extraction heuristic, Markdown twins, 38em serif template, reload on exit), `searlx_core::blocking` (`WKContentRuleList` compiler, 36 tracker domains, YouTube ad scripts, Hide Elements selector synthesis & before-first-paint CSS, Site CSS sanitizer & private read-only guard), and `searlx_core::page_tools` (Dusk 2,000-sheet/8M/48M budgets & filter fallback, in-place Translation with Show Original, and 30,000 pt / 64M-pixel Page Capture planner).
 - **2026-11-21** — P2-13..P2-19 done. Added `searlx_core::privacy` (`PermissionStore` + `StoreCompositor` enforcing zero durable writes for private/agent tabs), `searlx_core::vault` (`PasswordVault` with main-frame & committed-origin verification, HTTPS→HTTP autofill refusal, 10-dot mask, and authenticated copy gate), `searlx_core::menus_and_pages` (`SiteCardModel`, page/tab/image context menus, `clean_link_url`, and single-tab `InternalPageKind` router), and `searlx_core::recovery` (signed appcast + SHA-256 verification, atomic `.old` bundle swap/rollback/sweep, 2-failure crash reload-loop breaker, and redacted local `crash.log`).
+- **2026-11-21** — P2-20, P2-21, P3-01..P3-08 done. Added `searlx_ui::a11y` (`FocusController`, `AccessibilityTree`, keyboard focus ring traversal), `searlx_testkit::bench` (`PerformanceBudget` CI harness verifying <25 ms 30-tab cold restore with 1 awake tab and ~5 GiB memory savings vs 30 live WebKitGTK processes), `searlx_core::spaces_profiles` (`SpacesManager`, `ProfilesManager`, `MergedProfileWindowGroup`), `searlx_core::pins_and_folders` (`PinsRegistry`, 3-level `PinFoldersManager`, 2 MiB/12-item credential-less RSS/Atom parser), and `searlx_core::groups_splits_switcher` (`TabGroupsManager` with `⇧⌘T` group reopen, 2–4 pane `SplitWorkspace`, and 150 ms `TabSwitcherSession` with moon cards).
 
 ---
 

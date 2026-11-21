@@ -3,11 +3,13 @@
 //! The UI talks to the app through commands and events. It never touches a
 //! concrete web engine.
 
+pub mod a11y;
 pub mod app;
 pub mod field;
 pub mod metrics;
 pub mod theme;
 
+pub use a11y::{A11yNode, A11yRole, FocusController, FocusTarget, build_chrome_a11y_tree};
 pub use app::{Shell, run};
 pub use field::{AddressField, FieldEvent};
 

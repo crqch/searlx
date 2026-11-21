@@ -40,3 +40,12 @@ fn fake_engine_matches_golden_event_transcript() {
     assert!(!transcript.contains("hunter2"));
     assert!(!transcript.contains("private-anchor"));
 }
+
+#[test]
+fn core_operations_meet_phase_2_performance_budgets() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let budgets = searlx_testkit::PerformanceBudgets::default();
+    let measured = searlx_testkit::verify_performance_budgets(temp.path(), &budgets)
+        .expect("performance budgets must pass");
+    assert!(measured.restore_30_tabs <= budgets.restore_30_tabs_max);
+}

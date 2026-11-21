@@ -8,6 +8,10 @@ use searlx_engine::{
     DataKinds, Engine, EngineEvent, FindOptions, InjectAt, Rect, ScriptWorld, TabOptions,
 };
 
+pub mod bench;
+
+pub use bench::{PerformanceBudgets, PerformanceMeasurements, verify_performance_budgets};
+
 /// A failure from a contract check.
 #[derive(Debug, thiserror::Error)]
 pub enum ContractError {
