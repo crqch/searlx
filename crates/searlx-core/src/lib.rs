@@ -6,6 +6,7 @@
 
 pub mod address;
 pub mod ai_agents_bench;
+pub mod apple_and_webauthn;
 pub mod blocking;
 pub mod bookmarks;
 pub mod commands;

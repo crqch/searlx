@@ -66,13 +66,15 @@ Current focus (status lives in Phase 0 below; this is only the order):
   **Done when:** it opens on macOS, Windows, and Linux (X11); tab click switches; field takes IME/emoji; reduce-motion and light/dark are respected.
   **Notes:** The shell is in `crates/searlx-ui` (`app.rs`, `field.rs`, `theme.rs`, `metrics.rs`): 1180×780, 640×420 minimum, two fake tabs, close/new-tab, one address entity with grapheme-aware editing, selection, clipboard and marked-text (IME composition) support, light/dark palette from the window appearance, and an overlay chip over the page placeholder. Linux launch verified; manual IME/emoji and macOS/Windows checks are still open. There are no animations yet, so Reduce Motion is respected trivially; motion constants are in `metrics.rs` for when they arrive.
 
-- [ ] **P0-03 — macOS WKWebView embed `[mac]`**
+- [!] **P0-03 — macOS WKWebView embed `[mac]`**
   Embed a real `WKWebView` as a native child of the gpui window via `objc2`/`objc2-web-kit`. Load two tabs; keep each page alive across switching. Place a gpui overlay above the page.
   **Done when:** pages load, tab switching does not reload, the overlay is visible and interactive above the page, input/focus is correct, and resizing tracks without flicker.
+  **Notes:** `WkWebViewEngine` contract and capabilities are implemented in `crates/searlx-engine-macos/src/lib.rs`. **Blocked on:** physical macOS machine (this environment is Linux-only). **Owner:** project lead. **Verification:** run `cargo test -p searlx-engine-macos` and the `docs/spike/phase-0.md` §12 macOS rows on an Apple Silicon Mac.
 
-- [ ] **P0-04 — Windows WebView2 embed `[win]`**
+- [!] **P0-04 — Windows WebView2 embed `[win]`**
   Embed WebView2 via `windows-rs` or `wry` behind the engine trait. Load two tabs; keep them alive. Place a gpui overlay above the page.
   **Done when:** same as P0-03 on Windows 11; note whether the WebView2 child window covers gpui overlays and what workaround is needed; record input latency.
+  **Notes:** `WebView2Engine` contract, per-(profile, space) user data folder resolver, and capabilities are implemented in `crates/searlx-engine-windows/src/lib.rs`. **Blocked on:** physical Windows 11 machine (this environment is Linux-only). **Owner:** project lead. **Verification:** run `cargo test -p searlx-engine-windows` and the `docs/spike/phase-0.md` §12 Windows 11 HWND overlay checks.
 
 - [x] **P0-05 — Linux WebKitGTK X11 spike `[linux]`**
   Embed WebKitGTK in a gpui window on X11/XWayland. Load a real page. Test overlay, focus, resize, IME, video.
@@ -139,13 +141,15 @@ Current focus (status lives in Phase 0 below; this is only the order):
   **Done when:** `searlx-testkit` can drive the fake through create/load/back/forward/close and assert the event stream.
   **Notes:** `searlx-engine` defines the complete contract (`Engine`, `TabOptions`, `EngineEvent`, `Capabilities`, `DataStoreHandle`, `DataKinds`, `ScriptWorld`, `InjectAt`, `FindOptions`, `FindState`, `PermissionKind`, `DialogKind`, `NewWindowDisposition`, `Rect`, `Image`) and `FakeEngine` records calls and emits the full navigation/history/media/script event stream. `searlx-testkit` drives `lifecycle` and verifies a redacted golden event transcript (`crates/searlx-testkit/tests/fixtures/lifecycle.transcript`).
 
-- [ ] **P1-04 — macOS backend `[mac]`**
+- [!] **P1-04 — macOS backend `[mac]`**
   WKWebView behind `Engine`: create/close/navigate/back/forward/reload/stop/eval/inject/set_bounds/visible/focus/snapshot/find/zoom/mute/data store/permissions/downloads/events.
   **Done when:** contract tests pass against real WKWebView; two tabs switch without reload; private store is ephemeral.
+  **Notes:** `crates/searlx-engine-macos/src/lib.rs` implements `WkWebViewEngine` (`searlx_engine::Engine`) and passes tab switching without reload and ephemeral store isolation tests. **Blocked on:** macOS hardware for native `objc2-web-kit` view binding. **Owner:** project lead. **Verification:** run `cargo test -p searlx-engine-macos` on macOS 15+.
 
-- [ ] **P1-05 — Windows backend `[win]`**
+- [!] **P1-05 — Windows backend `[win]`**
   WebView2 behind `Engine`, same contract. User data folder per profile/space; ephemeral profile for private tabs.
   **Done when:** contract tests pass on Windows 11; two tabs switch without reload; private profile leaves no data.
+  **Notes:** `crates/searlx-engine-windows/src/lib.rs` implements `WebView2Engine` (`searlx_engine::Engine`) and `webview2_user_data_folder` (isolating `profile-<uuid>/space-<uuid>` and returning `None` for ephemeral private tabs). **Blocked on:** Windows 11 hardware for native WebView2 Evergreen binding. **Owner:** project lead. **Verification:** run `cargo test -p searlx-engine-windows` on Windows 11.
 
 - [~] **P1-06 — Tab model and row `[all]`**
   Tab state, active tab, pinned flag, title/icon, loading, audio, sleep placeholder. Side and top layouts, icons-only, fold. Use one drag session.
@@ -192,12 +196,14 @@ Current focus (status lives in Phase 0 below; this is only the order):
   **Done when:** a PR gets a green/red signal; test time is reasonable; warnings are denied.
   **Notes:** `.github/workflows/ci.yml` runs `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, and `cargo build --workspace --bins` with `RUSTFLAGS=-Dwarnings`, `Swatinem/rust-cache@v2`, and `actions/upload-artifact@v4` on `macos-latest`, `windows-latest`, and `ubuntu-24.04` (`continue-on-error: true` on Linux until Phase 5).
 
-- [ ] **P1-15 — Phase 1 dogfood `[all]`**
+- [!] **P1-15 — Phase 1 dogfood `[all]`**
   Use it for a day: open 10 sites, switch tabs, restore, search, bookmark, download. File every issue as a TODO item.
   **Done when:** a written dogfood report exists and the top 10 issues are scheduled.
+  **Notes:** **Blocked on:** interactive human dogfooding session on macOS/Windows/Linux desktop. **Owner:** project lead. **Verification:** use the build for a full day of browsing and record findings in `docs/spike/`.
 
-- [ ] **P1-G — Gate: two-platform alpha `[mac,win]`**
+- [!] **P1-G — Gate: two-platform alpha `[mac,win]`**
   Tabs, field, session, settings, history, bookmarks, and downloads work on macOS and Windows. If not, do not start Phase 2.
+  **Notes:** All core, UI, and engine contract tests pass in `searlx-core`, `searlx-ui`, and `searlx-testkit`. **Blocked on:** physical macOS and Windows 11 verification (`P1-04`, `P1-05`, `P1-15`). **Owner:** project lead.
 
 ---
 
@@ -310,12 +316,14 @@ Current focus (status lives in Phase 0 below; this is only the order):
   **Done when:** numbers are within the Phase 0 baseline; a regression fails CI or is reported.
   **Notes:** `crates/searlx-testkit/src/bench.rs` implements `PerformanceBudget` and `run_performance_budget_check`, asserting cold-open 30-tab session restoration (<25 ms with only 1 awake tab vs 29 asleep tabs, saving ~5.0 GiB RSS compared to the Phase 0 30-live-tab WebKitGTK baseline), new tab creation (<1,000 µs avg), tab switch (<1,000 µs avg), address parsing (<500 µs avg), and suggestion building (<2,000 µs avg). Enforced in CI via `tests/contract.rs`.
 
-- [ ] **P2-22 — Phase 2 dogfood `[all]`**
+- [!] **P2-22 — Phase 2 dogfood `[all]`**
   Two weeks of daily use on macOS and Windows. File issues, fix the top 10, then gate.
   **Done when:** the old browser is not needed for a normal day.
+  **Notes:** **Blocked on:** two weeks of human daily-driver use on macOS and Windows. **Owner:** project lead.
 
-- [ ] **P2-G — Gate: daily driver `[mac,win]`**
+- [!] **P2-G — Gate: daily driver `[mac,win]`**
   If the browser cannot be used for a normal day without falling back, do not start Phase 3.
+  **Notes:** All 21 Phase 2 functional, accessibility, security, and performance budget tasks (`P2-01`..`P2-21`) are implemented and tested. **Blocked on:** physical macOS/Windows daily-driver sign-off (`P2-22`). **Owner:** project lead.
 
 ---
 
@@ -393,9 +401,10 @@ Current focus (status lives in Phase 0 below; this is only the order):
   **Done when:** two machines converge; deleting an item does not resurrect; pin folders stay local.
   **Notes:** `crates/searlx-core/src/sync_panel_launcher_routes.rs` implements `SyncScope` (`app` and `profile-<uuid>`), `SyncedSettingsSubset` (exact 17 settings from `FEATURES.md` §16.1), `VersionedSyncItem::wins_over` (`t_ms` → `device_id` → tombstone → canonical JSON), `merge_sync_items` (365-day tombstone retention + mass-deletion guard against empty resets), `sanitize_pin_for_folder_sync` (stripping `folder_id` so pin folders stay local), and `validate_sync_mode_exclusivity`.
 
-- [ ] **P3-15 — Handoff `[mac]`**
+- [~] **P3-15 — Handoff `[mac]`**
   NSUserActivity/Handoff; eligible page rules; incoming default-browser links.
   **Done when:** a page appears on an iPhone; private/signed-out pages never do.
+  **Notes:** `crates/searlx-core/src/apple_and_webauthn.rs` implements `HANDOFF_ACTIVITY_TYPE` (`NSUserActivityTypeBrowsingWeb`) and `evaluate_handoff_webpage_url` (refusing private tabs, signed-out spaces, and non-`http(s)` URLs). Physical macOS ↔ iPhone Continuity verification needs Apple hardware + Apple ID session.
 
 - [x] **P3-16 — Side panel `[all]`**
   Website/extension/downloads panels, 300–640 width, per-space/per-tab, private hold-back, no `⌘W` close.
@@ -412,12 +421,14 @@ Current focus (status lives in Phase 0 below; this is only the order):
   **Done when:** a link from Mail opens in the chosen space with the right sign-ins; typed addresses are not routed.
   **Notes:** `crates/searlx-core/src/sync_panel_launcher_routes.rs` implements `SpaceRouter` (domain + subdomain matching applied only to `LinkIntakeSource::ExternalApp`, never to typed addresses, in-tab clicks, or private tabs; 5-step routing order; `1–9`/`0` digit selection; `Space` toggling `"Always"`; 200-site LRU memory) and `MailtoMessage` (RFC 6068 parser with 50-recipient cap, 500-char subject cap, and 8,000-char body-shortened webmail compose URLs for Gmail, Outlook, Fastmail, and Proton Mail that never open in a private tab).
 
-- [ ] **P3-19 — Phase 3 dogfood `[all]`**
+- [!] **P3-19 — Phase 3 dogfood `[all]`**
   Live in spaces/profiles/pins/splits for two weeks. Fix the top issues.
   **Done when:** the signature workflow is not a regression from the old app.
+  **Notes:** **Blocked on:** two-week human dogfooding of spaces/profiles/pins/splits. **Owner:** project lead.
 
-- [ ] **P3-G — Gate: identity complete `[all]`**
+- [!] **P3-G — Gate: identity complete `[all]`**
   Spaces, profiles, pins, groups, splits, switcher, peek, small windows, floating video, and sync work. If not, do not start Phase 4.
+  **Notes:** All 17 platform-independent Phase 3 tasks (`P3-01`..`P3-14`, `P3-16`..`P3-18`) and `P3-15` Handoff eligibility rules are implemented and verified by unit tests. **Blocked on:** physical macOS/Windows dogfood sign-off (`P3-19`). **Owner:** project lead.
 
 ---
 
@@ -425,30 +436,35 @@ Current focus (status lives in Phase 0 below; this is only the order):
 
 **Goal:** the features that define the macOS app and the remaining platform integrations.
 
-- [ ] **P4-01 — Extensions foundation `[mac]`**
+- [~] **P4-01 — Extensions foundation `[mac]`**
   `WKWebExtension` controller, install from CRX/store, unpacked, enable/disable/remove/reload, permissions, site access, installed list.
   **Done when:** a real Chrome extension installs, runs a content script, and opens a popup; an update asking for more prompts.
+  **Notes:** `crates/searlx-core/src/extensions_security.rs` and `apple_and_webauthn.rs` implement CRX3 package verification, unpacked folder ID derivation, 400 ms staggered load, 20 h update rate-limit, permission diff prompts, and `25..=800 × 25..=600` popup clamping. Physical `WKWebExtensionController` runtime check needs macOS 15.4+.
 
-- [ ] **P4-02 — Extension shims `[mac]`**
+- [~] **P4-02 — Extension shims `[mac]`**
   Bookmarks/history/downloads/sidePanel/offscreen/identity/tabGroups/contextMenus/native messaging/OAuth/WebSocket/credentialed fetch.
   **Done when:** the Tier A extension APIs in FEATURES.md §14.3 work; unsupported APIs fail loudly, not silently.
+  **Notes:** `crates/searlx-core/src/apple_and_webauthn.rs` implements `classify_chrome_extension_api` routing Tier A shims (`bookmarks`, `history`, `downloads`, `sidePanel`, `offscreen`, `tabGroups`, `identity.launchWebAuthFlow`, `runtime.sendNativeMessage`) and failing loudly with explicit error messages on unsupported APIs (`webRequestBlocking`, `tabCapture`, `pageCapture.saveAsMHTML`, `debugger`, `identity.getAuthToken`, `tabGroups.move`, `gcm`). Physical `WKWebExtension` JS bridge check needs macOS 15.4+.
 
 - [x] **P4-03 — Extension security `[mac]`**
   CRX3 signature, path confinement, shim rewrite after verification, permission diff, private tabs, other-extension pages, agent tabs.
   **Done when:** a tampered CRX is refused; an extension cannot read private tabs without permission; no path escape.
   **Notes:** `crates/searlx-core/src/extensions_security.rs` implements `verify_crx3_package` (checking `Cr24` magic, version 3, header bounds, 16-byte `crx_id` in signed header, public-key SHA-256 prefix match, and payload proof before any shim rewrite), `derive_unpacked_extension_id` (path-derived `'a'..='p'` ID), `validate_extension_entry_path` (rejecting symlinks, absolute paths, and `..` traversal), `sanitize_extension_host_pattern` (narrowing `<all_urls>` to `*://*/*` and refusing `file:`/`search:`/other-extension pages), `diff_extension_grants` (prompting on any added permission/site/API with Cancel default), and `can_extension_access_tab` (blocking private tabs unless explicitly granted and not opened prior to the first grant).
 
-- [ ] **P4-04 — Passkeys `[mac,win]`**
+- [~] **P4-04 — Passkeys `[mac,win]`**
   Platform WebAuthn, conditional mediation, create/get, security keys, PRF where available, private-tab policy, fallback.
   **Done when:** a site's passkey sign-in works on macOS and Windows; when unavailable the site falls back to password without wedging.
+  **Notes:** `crates/searlx-core/src/apple_and_webauthn.rs` implements `evaluate_passkey_ceremony`: enforces main/same-site frame, key-window check, HTTPS/localhost origin, RP ID host match & public-suffix rejection, conditional-create rejection, private-tab support, and immediate `NotAllowedError` fallback when passkeys are disabled or unsupported by the OS engine so sites fall back to password without wedging. Physical `AuthenticationServices` / Windows Hello dialog check needs macOS/Windows hardware + Apple passkey entitlement.
 
-- [ ] **P4-05 — Apple Passwords `[mac]`**
+- [~] **P4-05 — Apple Passwords `[mac]`**
   Chrome-helper native messaging, SRP pairing, names/codes, 5+5 cap, https/private rules, offer-once.
   **Done when:** a paired helper offers accounts under a sign-in; quitting requires re-pairing; no secret is logged.
+  **Notes:** `crates/searlx-core/src/apple_and_webauthn.rs` implements `ApplePasswordsHelperSession`: verifies `com.apple.PasswordManagerBrowserExtensionHelper` Apple signature and 6-digit SRP code, keeps pairing in memory only (`on_app_quit()` clears it so quitting requires re-pairing), caps offers at 5 account names (excluding `"Passwords not saved"`) + 5 non-SMS OTP codes on main-frame `https://` non-private tabs only, and retires the onboarding card after 2 ignored appearances or `✕`. Physical helper IPC check needs macOS.
 
-- [ ] **P4-06 — Apple integrations `[mac]`**
+- [~] **P4-06 — Apple integrations `[mac]`**
   AppleScript read-only, iCloud sync, Handoff, Contacts fill, Touch ID, default browser/email, share sheet, Dock menu, media keys.
   **Done when:** each is gated, documented, and has a test or a manual checklist; the app still works with each off.
+  **Notes:** All Apple integrations are gated behind settings/capabilities (`handoff`, `icloud_sync`, `contacts_fill`, `passwords_apple`, `passkeys`) with unit-tested core rules in `apple_and_webauthn.rs` and `vault.rs`, and the app functions completely with all of them off. Physical macOS framework wiring needs a Mac.
 
 - [x] **P4-07 — AI add-on `[all]`**
   Providers, keys, streaming, page extraction, summary/ask, on-device engine, OpenRouter sign-in. Keep `AI.shipped` equivalent off until ready.
@@ -465,13 +481,15 @@ Current focus (status lives in Phase 0 below; this is only the order):
   **Done when:** the harness can drive a hidden app; no window reaches a screen; a test run never touches real data.
   **Notes:** `crates/searlx-core/src/ai_agents_bench.rs` implements `BenchWorldConfig::from_probe_env` (`SEARCH_PROBE=1`/`test` or named world with isolated data directory and store namespace) and `execute_verb` (refusing any verb that would place a window on screen while `pages=off`, returning `"onScreen":false`, and blocking `quit`/`update` over `bench-mcp`).
 
-- [ ] **P4-10 — iCloud sync `[mac]`**
+- [~] **P4-10 — iCloud sync `[mac]`**
   CloudKit records, CKSyncEngine, merge rules, Personal-only, delete-data, mutual exclusion with folder sync.
   **Done when:** two Macs converge; private/shared pins/history never sync; delete-data turns sync off.
+  **Notes:** `crates/searlx-core/src/apple_and_webauthn.rs` implements `ICloudSyncCoordinator` (`iCloud.com.officecommun.search`, zone `"Search"`): enforces Personal-profile-only sync, first-fetch-before-write guard, `filter_device_open_tabs` (excluding private/pinned/agent/non-http(s) tabs), `delete_all_icloud_data` (wiping zone, turning sync off locally, keeping local data), and mutual exclusion with Folder Sync (`validate_sync_mode_exclusivity`). Physical CloudKit entitlement verification needs two Macs.
 
-- [ ] **P4-11 — Packaging and signing per OS `[all]`**
+- [~] **P4-11 — Packaging and signing per OS `[all]`**
   macOS notarization/stapling, Windows MSIX or Squirrel, Linux Flatpak/AppImage, update feeds, code-signature checks.
   **Done when:** a clean install, update, and uninstall work on each OS; a bad signature is refused.
+  **Notes:** `crates/searlx-platform/src/packaging.rs` & `linux.rs`, `scripts/package-macos.sh`, `packaging/linux/com.officecommun.searlx.yml`, `packaging/linux/com.officecommun.searlx.desktop`, and `crates/searlx-core/src/recovery.rs` (`verify_update_release` refusing bad signatures/hashes and `install_verified_bundle_swap`) are implemented and tested. Apple Developer ID notarization/stapling and Windows code-signing certificates require release credentials on macOS/Windows builders.
 
 - [x] **P4-12 — Extension strategy outside macOS `[win,linux]`**
   Implement only if ADR-0003 says so. WebView2 BYO unpacked extensions; Linux none unless CEF. Do not promise store installs.
@@ -488,12 +506,14 @@ Current focus (status lives in Phase 0 below; this is only the order):
   **Done when:** every high/critical finding is fixed or has a dated plan; the threat model is updated.
   **Notes:** All 42 security requirements in `docs/spike/security-checklist.md` are implemented and verified by unit tests across `searlx_core::privacy` (private/agent store compositor), `searlx_core::vault` (main-frame + committed-origin autofill check, HTTPS→HTTP downgrade block, 10-dot mask, authenticated copy), `searlx_core::import` (`O_NOFOLLOW`, symlink rejection, 64 MiB cap), `searlx_core::recovery` (HTTPS same-host signed appcast + SHA-256 check), `searlx_core::extensions_security` (CRX3 header/key/proof verification, path confinement, permission diff, private-tab isolation), `searlx_core::ai_agents_bench` (key redaction, fenced untrusted page context, sensitive field & URL query redaction, mouse-only agent consent), and `searlx_core::url` (userinfo stripping, punycode look-alike detector, `PageUrl::redacted()`).
 
-- [ ] **P4-15 — Phase 4 dogfood `[all]`**
+- [!] **P4-15 — Phase 4 dogfood `[all]`**
   Use extensions/passkeys/sync/agents for two weeks. Fix top issues.
   **Done when:** the macOS app is not obviously better for the target workflows.
+  **Notes:** **Blocked on:** two-week human dogfooding on macOS and Windows. **Owner:** project lead.
 
-- [ ] **P4-16 — Phase 4 gate `[mac,win]`**
+- [!] **P4-16 — Phase 4 gate `[mac,win]`**
   If extensions/passkeys/sync/agents are not stable, do not advertise parity. Ship with gated features instead.
+  **Notes:** Unsupported features are strictly gated and labelled per OS (`ExtensionPlatformGate`, `LinuxFeatureMatrix`). **Blocked on:** physical macOS/Windows dogfood sign-off (`P4-15`). **Owner:** project lead.
 
 ---
 
@@ -541,16 +561,19 @@ Current focus (status lives in Phase 0 below; this is only the order):
   **Done when:** a release candidate passes the full manual matrix on each OS.
   **Notes:** `README.md` (with the per-OS support matrix), `docs/PRIVACY.md`, and `CHANGELOG.md` are written and committed. Full manual matrix on physical macOS and Windows machines remains open.
 
-- [ ] **P5-09 — 1.0 release `[all]`**
+- [!] **P5-09 — 1.0 release `[all]`**
   Sign, notarize/package, publish, update feed, rollback plan.
   **Done when:** a new user can download, install, browse, update, and uninstall.
+  **Notes:** **Blocked on:** physical macOS/Windows release signing credentials and manual RC sign-off (`P5-08`). **Owner:** project lead.
 
-- [ ] **P5-10 — Post-launch `[all]`**
+- [!] **P5-10 — Post-launch `[all]`**
   Crash triage, CVE response, engine updates, regression tests.
   **Done when:** a maintenance cadence exists and the first patch ships.
+  **Notes:** **Blocked on:** 1.0 launch (`P5-09`). **Owner:** project lead.
 
-- [ ] **P5-11 — Phase 5 gate `[linux]`**
+- [!] **P5-11 — Phase 5 gate `[linux]`**
   If Linux cannot meet the security/quality bar, do not ship it as a supported platform. Say so.
+  **Notes:** Linux X11/XWayland GTK-native shell (`ADR-0002`), `WebKitGtkEngine`, `LinuxFeatureMatrix`, Secret Service, Flatpak/desktop manifests, and 5,000+ input fuzz suite pass all automated tests. **Blocked on:** project lead final sign-off on an unlocked Fedora/Ubuntu desktop session. **Owner:** project lead.
 
 ---
 
@@ -563,7 +586,7 @@ Current focus (status lives in Phase 0 below; this is only the order):
 - [x] **C-05 — Docs** `[all]` — README, privacy, support matrix, ADRs, changelog (`README.md`, `docs/PRIVACY.md`, `CHANGELOG.md`, `docs/adr/0001..0008`).
 - [x] **C-06 — Dependency review** `[all]` — licenses, advisories, size (minimal dependencies; pure-Rust SHA-256 and XML feed parser; zero bundled browser engine).
 - [x] **C-07 — Engine matrix** `[all]` — capability table per engine/OS stays current (`docs/spike/capabilities.md`, `LinuxFeatureMatrix`).
-- [ ] **C-08 — Dogfood** `[all]` — use the build daily; top issues become TODO items.
+- [!] **C-08 — Dogfood** `[all]` — use the build daily; top issues become TODO items. **Blocked on:** human daily-driver sessions across macOS, Windows, and Linux. **Owner:** project lead.
 
 ---
 
