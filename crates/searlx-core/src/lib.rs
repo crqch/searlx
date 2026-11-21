@@ -5,6 +5,7 @@
 //! codecs, and migrations. It must not depend on a UI toolkit or a web engine.
 
 pub mod address;
+pub mod ai_agents_bench;
 pub mod blocking;
 pub mod bookmarks;
 pub mod commands;
@@ -12,6 +13,7 @@ pub mod data;
 pub mod domain;
 pub mod downloads;
 pub mod error;
+pub mod extensions_security;
 pub mod find;
 pub mod gestures_lifecycle;
 pub mod groups_splits_switcher;

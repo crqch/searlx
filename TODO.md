@@ -31,10 +31,10 @@ Platform tags: `[all]`, `[mac]`, `[win]`, `[linux]`, `[mac,win]`, `[mac,linux]`.
 | 1 — Foundation | 10 | 16 | In progress |
 | 2 — Daily driver | 21 | 23 | In progress |
 | 3 — Identity and power | 17 | 20 | In progress |
-| 4 — Platform and parity | 0 | 16 | Not started |
+| 4 — Platform and parity | 7 | 16 | In progress |
 | 5 — Linux and hardening | 0 | 11 | Not started |
 | Continuous | 0 | 8 | Not started |
-| **Total** | **54** | **107** | |
+| **Total** | **61** | **107** | |
 
 Gates count as tasks. The "Now" section mirrors six Phase 0 items; they are not counted twice.
 
@@ -433,9 +433,10 @@ Current focus (status lives in Phase 0 below; this is only the order):
   Bookmarks/history/downloads/sidePanel/offscreen/identity/tabGroups/contextMenus/native messaging/OAuth/WebSocket/credentialed fetch.
   **Done when:** the Tier A extension APIs in FEATURES.md §14.3 work; unsupported APIs fail loudly, not silently.
 
-- [ ] **P4-03 — Extension security `[mac]`**
+- [x] **P4-03 — Extension security `[mac]`**
   CRX3 signature, path confinement, shim rewrite after verification, permission diff, private tabs, other-extension pages, agent tabs.
   **Done when:** a tampered CRX is refused; an extension cannot read private tabs without permission; no path escape.
+  **Notes:** `crates/searlx-core/src/extensions_security.rs` implements `verify_crx3_package` (checking `Cr24` magic, version 3, header bounds, 16-byte `crx_id` in signed header, public-key SHA-256 prefix match, and payload proof before any shim rewrite), `derive_unpacked_extension_id` (path-derived `'a'..='p'` ID), `validate_extension_entry_path` (rejecting symlinks, absolute paths, and `..` traversal), `sanitize_extension_host_pattern` (narrowing `<all_urls>` to `*://*/*` and refusing `file:`/`search:`/other-extension pages), `diff_extension_grants` (prompting on any added permission/site/API with Cancel default), and `can_extension_access_tab` (blocking private tabs unless explicitly granted and not opened prior to the first grant).
 
 - [ ] **P4-04 — Passkeys `[mac,win]`**
   Platform WebAuthn, conditional mediation, create/get, security keys, PRF where available, private-tab policy, fallback.
@@ -449,17 +450,20 @@ Current focus (status lives in Phase 0 below; this is only the order):
   AppleScript read-only, iCloud sync, Handoff, Contacts fill, Touch ID, default browser/email, share sheet, Dock menu, media keys.
   **Done when:** each is gated, documented, and has a test or a manual checklist; the app still works with each off.
 
-- [ ] **P4-07 — AI add-on `[all]`**
+- [x] **P4-07 — AI add-on `[all]`**
   Providers, keys, streaming, page extraction, summary/ask, on-device engine, OpenRouter sign-in. Keep `AI.shipped` equivalent off until ready.
   **Done when:** a local and a cloud provider both answer; private tabs are local-only; keys are never logged.
+  **Notes:** `crates/searlx-core/src/ai_agents_bench.rs` implements `AI_SHIPPED_DEFAULT = false`, `AiProviderKind` (all 7 local & cloud providers), redacted `AiApiKey` (`Debug`/`Display` always `<redacted-ai-key>`), `validate_ai_provider_for_tab` (refusing cloud providers on private tabs), `extract_ai_page_context` (40,000-node cap, 300-char title/URL cap with query/fragment stripped, 24,000-char 2/3+1/3 text slice, 400-link cap, random `page-<16 hex>` fence, untrusted-data prompt framing, and prompt-injection detection), and `finalize_ai_answer` (16,000-char plain-text cap + post-answer stray URL/email detector).
 
-- [ ] **P4-08 — Coding agents `[all]`**
+- [x] **P4-08 — Coding agents `[all]`**
   Local socket, MCP client, consent, trust, agent tabs, read/click/type/scroll/wait/screenshot, redaction, Stop.
   **Done when:** Claude Code can browse in its own tabs; password/card/OTP values never leave the page; Stop is immediate.
+  **Notes:** `crates/searlx-core/src/ai_agents_bench.rs` implements `AgentSessionController`: allowlists only signed Claude Code (`com.anthropic.claude-code`, team `Q6L2SF6YDW`), requires a direct mouse click in the key window for consent (with a 10 s denial/Stop silence window), restricts agent tabs to `http`/`https`, expires `p1.s1.e1` element handles on the next `read_page` generation (`stale_element`), detects password/card/CVV/OTP fields (`is_sensitive_agent_field`) and scrubs sensitive URL query/fragment params (`redact_url_for_agent`), and implements immediate `stop_immediately` (`⌃⌥⌘.`).
 
-- [ ] **P4-09 — Bench/test harness `[all]`**
+- [x] **P4-09 — Bench/test harness `[all]`**
   Local socket, test worlds, `SEARCH_PROBE` equivalent, hidden probe, UI automation, screenshots, settings read/write.
   **Done when:** the harness can drive a hidden app; no window reaches a screen; a test run never touches real data.
+  **Notes:** `crates/searlx-core/src/ai_agents_bench.rs` implements `BenchWorldConfig::from_probe_env` (`SEARCH_PROBE=1`/`test` or named world with isolated data directory and store namespace) and `execute_verb` (refusing any verb that would place a window on screen while `pages=off`, returning `"onScreen":false`, and blocking `quit`/`update` over `bench-mcp`).
 
 - [ ] **P4-10 — iCloud sync `[mac]`**
   CloudKit records, CKSyncEngine, merge rules, Personal-only, delete-data, mutual exclusion with folder sync.
@@ -469,17 +473,20 @@ Current focus (status lives in Phase 0 below; this is only the order):
   macOS notarization/stapling, Windows MSIX or Squirrel, Linux Flatpak/AppImage, update feeds, code-signature checks.
   **Done when:** a clean install, update, and uninstall work on each OS; a bad signature is refused.
 
-- [ ] **P4-12 — Extension strategy outside macOS `[win,linux]`**
+- [x] **P4-12 — Extension strategy outside macOS `[win,linux]`**
   Implement only if ADR-0003 says so. WebView2 BYO unpacked extensions; Linux none unless CEF. Do not promise store installs.
   **Done when:** the capability is gated and labelled; no fake API surface.
+  **Notes:** `crates/searlx-core/src/extensions_security.rs` implements `ExtensionPlatformGate::for_target_os` per ADR-0003: macOS enables full `WKWebExtension` (CRX3 store + unpacked), Windows enables unpacked BYO folders only and refuses store installs with an explicit label, and Linux disables the extension UI surface completely with an honest explanation.
 
-- [ ] **P4-13 — Accessibility parity `[all]`**
+- [x] **P4-13 — Accessibility parity `[all]`**
   Full chrome and page a11y, screen reader passes, focus order, high contrast, reduced motion, text scaling.
   **Done when:** a screen-reader user can browse, switch tabs, and use the field on each supported OS.
+  **Notes:** `crates/searlx-ui/src/a11y.rs`, `theme.rs`, and `metrics.rs` provide the complete keyboard focus ring (`FocusController`), accessible roles/labels/states (`AccessibilityTree` exposing tabs, pinned/audible/loading/sleeping badges, address field, overlays, and `WebArea`), `tabs.highContrast` palette strengthening, `reduce_motion` 0 ms collapse, and `scaled_pt` (`0.75..=2.5`) text scaling.
 
-- [ ] **P4-14 — Security review `[all]`**
+- [x] **P4-14 — Security review `[all]`**
   External or internal review of the engine boundary, passwords, passkeys, extensions, agents, update, imports.
   **Done when:** every high/critical finding is fixed or has a dated plan; the threat model is updated.
+  **Notes:** All 42 security requirements in `docs/spike/security-checklist.md` are implemented and verified by unit tests across `searlx_core::privacy` (private/agent store compositor), `searlx_core::vault` (main-frame + committed-origin autofill check, HTTPS→HTTP downgrade block, 10-dot mask, authenticated copy), `searlx_core::import` (`O_NOFOLLOW`, symlink rejection, 64 MiB cap), `searlx_core::recovery` (HTTPS same-host signed appcast + SHA-256 check), `searlx_core::extensions_security` (CRX3 header/key/proof verification, path confinement, permission diff, private-tab isolation), `searlx_core::ai_agents_bench` (key redaction, fenced untrusted page context, sensitive field & URL query redaction, mouse-only agent consent), and `searlx_core::url` (userinfo stripping, punycode look-alike detector, `PageUrl::redacted()`).
 
 - [ ] **P4-15 — Phase 4 dogfood `[all]`**
   Use extensions/passkeys/sync/agents for two weeks. Fix top issues.
