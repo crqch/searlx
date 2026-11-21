@@ -139,6 +139,32 @@ for n in 1 10 30; do
 done
 ```
 
+### 5.2 Hard interactions (P0-07)
+
+`crates/searlx-engine-linux/src/bin/interactions.rs` builds the five
+interactions in the GTK shell and drives them programmatically:
+
+| Interaction | What was exercised | Result | What is still manual |
+|---|---|---|---|
+| Overlay menu above a page | `GtkPopover` anchored to a menu button, `popup()`/`popdown()` | `visible=true`, `relative_to_menu=true`, then `visible=false` after popdown. The X11 window image shows the menu button and the overlay chip above the split page. | A real pointer click and the menu items' hover/selection. The popover content is a separate 72×48 GdkWindow; window readback did not include its rows. |
+| Tab drag with a lift panel | Popup lift window shown at `(321, 140)`, hidden after 400 ms; notebook `reorder_child` | `tab_lift shown=true`, `hidden=true`, `tab_reorder current=1 pages=2`; the video image shows the tabs reordered to Page, Split. | A real drag gesture and drop target hit-testing. The lift was moved by code, not by a pointer. |
+| Split divider | `GtkPaned` position `560 → 374 → 224` at width 748 | Every request matched `position()`; `size-allocate` followed. | Dragging the 7 pt gutter with a pointer; the 250 pt minimum; focus routing. |
+| IME/emoji | Emoji in `GtkEntry` and in page text; `preedit-changed`/`changed` handlers | Entry text `searlx 🙂` (`has_emoji=true`); page title `emoji-🙂`, page text 13,040 chars. | Real IME composition (CJK preedit, candidate window) and emoji input from a keyboard. |
+| Video fullscreen/PiP/floating | Local 640×360 VP9 WebM, `play()`, `requestFullscreen()`, PiP capability query | `readyState=4`, `videoWidth=640`, `videoHeight=360`, `currentTime≈0.004`, `paused=false`, `playState=ok`. Fullscreen API exists and `document.fullscreenElement` was non-null; the scripted promise succeeded in one run and rejected with `TypeError` in another. **PiP is absent:** `pictureInPictureEnabled=false`, `requestPictureInPicture` missing. Floating/reparenting was not implemented. | A real user gesture for fullscreen, visible frames (the window snapshot is black in the video area), audio, and any floating-player design. |
+
+The program exits `ok` after 3.4 s; self RSS with two pages plus video was
+~196 MB. The important negative result is **native PiP is not available on
+WebKitGTK 2.54.2**. The capability descriptor now reports `native_pip = false`;
+the UI must hide the PiP control on Linux rather than offer a dead button.
+
+The second negative result is that **window/page snapshots do not capture video
+frames** even while `currentTime` advances. Video evidence needs a real display,
+a compositor capture, or a frame callback; a black PNG is not proof that playback
+failed.
+
+All five interactions are wired and their logic runs. None of the pointer or IME
+paths are proven by this run. P0-07 stays in progress.
+
 ### Evidence
 
 - [X11 page snapshot](evidence/x11-page.png)

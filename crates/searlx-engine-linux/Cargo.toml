@@ -25,5 +25,9 @@ path = "src/bin/spike.rs"
 name = "searlx-bench-linux"
 path = "src/bin/bench.rs"
 
+[[bin]]
+name = "searlx-interactions-linux"
+path = "src/bin/interactions.rs"
+
 [lints]
 workspace = true

@@ -31,8 +31,8 @@ provide for them.
 | Find in page | `find(_:configuration:completionHandler:)` `D` | `Find` API on recent runtime `U` | `WebKitFindController` `D` |
 | Print | `printOperation` `D` | `ShowPrintUI` `D` | `webkit_print_operation_*` `D` |
 | Export PDF | `createPDF` `D` | `PrintToPdfAsync` `D` | Needs a print-to-PDF path `U` |
-| HTML fullscreen | Yes `D` | `ContainsFullScreenElementChanged` `D` | `enter-fullscreen` signal `D` |
-| Native picture-in-picture | AVKit/WebKit `U` | Not exposed by WebView2 `U` | Not built in `U` |
+| HTML fullscreen | Yes `D` | `ContainsFullScreenElementChanged` `D` | Yes `M` (DOM fullscreen entered; a scripted request is not reliable) |
+| Native picture-in-picture | AVKit/WebKit `U` | Not exposed by WebView2 `U` | **—** `M` (no `pictureInPictureEnabled` / `requestPictureInPicture` in 2.54.2) |
 | Camera/mic/screen permission prompts | `WKUIDelegate` `D` | `PermissionRequested` `D` | `permission-request` signal `D` |
 | Geolocation | `WKUIDelegate` `D` | `PermissionRequested` `D` | `permission-request` signal `D` |
 | Notifications | WebKit notification API `U` | `PermissionRequested` + web notifications `U` | WebKit notification API `U` |
@@ -81,7 +81,11 @@ provide for them.
   window is not possible today; ADR-0002 proposes a GTK-native shell instead.
 - Wayland focus/activation and whole-window readback failed in a locked
   session. Native Wayland stays experimental until retested unlocked.
-- IME, frame rate, video, and a11y are unmeasured.
+- P0-07 measured: HTML video loads and plays (`readyState=4`, 640×360,
+  `currentTime` advances, `paused=false`), DOM fullscreen works, but **native
+  PiP is absent** and window readback is black over the video surface. Text
+  emoji works in the field and page; real IME composition is unmeasured.
+- Frame rate and a11y are unmeasured.
 
 ## Tier A implications
 
