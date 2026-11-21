@@ -466,7 +466,14 @@ impl Engine for FakeEngine {
 
     fn set_muted(&mut self, id: TabId, muted: bool) -> EngineResult<()> {
         self.calls.push(FakeCall::SetMuted(id, muted));
-        self.require_tab(id)?.muted = muted;
+        let tab = self.require_tab(id)?;
+        tab.muted = muted;
+        let audible = tab.audible;
+        self.events.push_back(EngineEvent::MediaStateChanged {
+            tab: id,
+            audible,
+            muted,
+        });
         Ok(())
     }
 

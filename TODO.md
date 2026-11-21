@@ -28,13 +28,13 @@ Platform tags: `[all]`, `[mac]`, `[win]`, `[linux]`, `[mac,win]`, `[mac,linux]`.
 | Phase | Done | Total | Status |
 |---|---:|---:|---|
 | 0 — Feasibility spike | 6 | 13 | In progress |
-| 1 — Foundation | 3 | 16 | In progress |
+| 1 — Foundation | 5 | 16 | In progress |
 | 2 — Daily driver | 0 | 23 | Not started |
 | 3 — Identity and power | 0 | 20 | Not started |
 | 4 — Platform and parity | 0 | 16 | Not started |
 | 5 — Linux and hardening | 0 | 11 | Not started |
 | Continuous | 0 | 8 | Not started |
-| **Total** | **9** | **107** | |
+| **Total** | **11** | **107** | |
 
 Gates count as tasks. The "Now" section mirrors six Phase 0 items; they are not counted twice.
 
@@ -134,9 +134,10 @@ Current focus (status lives in Phase 0 below; this is only the order):
   **Done when:** the P0-11 fixture round-trips byte-equivalently where expected and old files load.
   **Notes:** `crates/searlx-core/src/data/store.rs` provides `DataStore` with mutex-serialized atomic writes, `read_or_default` corrupt-file quarantine fallback, versioned migration (`migrate_session_file`, `migrate_bookmarks_file`), disk caps (2,000 history visits, 500 archived tabs, 50 downloads), schemas for all `FEATURES.md` §25 files (`profiles.json`, `archive.json`, `downloads.json`, `pin-folders.json`, `search-sites.json`), and one-time `"Office Browser"` → `"Search"` directory migration. `skip_serializing_if = "Option::is_none"` prevents spurious nulls; all 9 P0-11 legacy fixtures preserve exact JSON values and round-trip byte-equivalently (`tests/data_fixtures.rs`).
 
-- [ ] **P1-03 — Engine trait and events `[all]`**
+- [x] **P1-03 — Engine trait and events `[all]`**
   Finalise `Engine`, `TabOptions`, `EngineEvent`, `Capabilities`, `DataStoreHandle`, `ScriptWorld`, `InjectAt`, `FindOptions`, `FindState`. Add a fake engine for tests.
   **Done when:** `searlx-testkit` can drive the fake through create/load/back/forward/close and assert the event stream.
+  **Notes:** `searlx-engine` defines the complete contract (`Engine`, `TabOptions`, `EngineEvent`, `Capabilities`, `DataStoreHandle`, `DataKinds`, `ScriptWorld`, `InjectAt`, `FindOptions`, `FindState`, `PermissionKind`, `DialogKind`, `NewWindowDisposition`, `Rect`, `Image`) and `FakeEngine` records calls and emits the full navigation/history/media/script event stream. `searlx-testkit` drives `lifecycle` and verifies a redacted golden event transcript (`crates/searlx-testkit/tests/fixtures/lifecycle.transcript`).
 
 - [ ] **P1-04 — macOS backend `[mac]`**
   WKWebView behind `Engine`: create/close/navigate/back/forward/reload/stop/eval/inject/set_bounds/visible/focus/snapshot/find/zoom/mute/data store/permissions/downloads/events.
@@ -150,9 +151,10 @@ Current focus (status lives in Phase 0 below; this is only the order):
   Tab state, active tab, pinned flag, title/icon, loading, audio, sleep placeholder. Side and top layouts, icons-only, fold. Use one drag session.
   **Done when:** create/close/reorder/pin/unpin works on macOS and Windows; a tab drag is smooth at 60+ fps.
 
-- [ ] **P1-07 — Address field and parsing `[all]`**
+- [x] **P1-07 — Address field and parsing `[all]`**
   Port FEATURES.md §4.2 parsing rules, Return/⌘Return/⇧⌘Return, completion, suggestions from history/bookmarks/open tabs, site chip, commands. Invalid input shakes.
   **Done when:** parser unit tests mirror the spec; manual cases: `localhost:3000`, `~/file`, `example.com`, `hello world`, `mailto:`, `[::1]:3000`, look-alike hosts.
+  **Notes:** `crates/searlx-core/src/address.rs` implements all `FEATURES.md` §4.2–4.4 rules: whitespace/single-word search vs bare host classification, `localhost`/`*.localhost`/`*.local`/`[::1]`/`127.0.0.1`/private IPv4 → `http://`, `0.0.0.0` → `http://localhost`, letter-TLD ≥2 check (dotted version numbers like `1.2.3` rejected as invalid), `/path` and `~/path` file existence check, `@` and unsupported scheme refusal (`mailto:`, `javascript:`), IDN punycode look-alike detector (`inspect_host_lookalike`), `SubmitDisposition` (`Return`/`⌘Return`/`⇧⌘Return`), 9 search engines + host-preserving template expansion, 16 built-in site searches (`Tab`-to-search & keywords), inline grey completion, and ordered suggestion builder (site offers, open tabs, frecency history, bookmarks/slips, known sites, commands, search fallback). Wired into `searlx-ui`.
 
 - [ ] **P1-08 — Session and restore `[all]`**
   Write/read session and windows files. Restore tabs asleep; active tab wakes; window frames; fresh-start mode; quarantine.
@@ -569,6 +571,7 @@ Create `docs/adr/NNNN-title.md` for each. Status: proposed/accepted/superseded.
 - **2026-11-21** — P0-07 partial. GTK prototype drives overlay popover, tab reorder/lift, split resize, entry/page emoji, and local video (2 pages + video, ~196 MB self RSS). Video plays and DOM fullscreen works, but native PiP is absent on WebKitGTK 2.54.2, window readback is black over video, and real pointer/IME paths still need an unlocked display. Linux `native_pip` corrected to false with a unit test. Results in `docs/spike/phase-0.md` §5.2.
 - **2026-11-21** — P0-05 done; P0-07 Linux X11 input/latency measured. Added `--external` mode and next-frame latency probes to `interactions.rs` and drove real X11 pointer, wheel, keyboard, emoji, Compose (`Multi_key`), split-drag, tab-drag, video frame counter, and window resize on `Xvfb :5` with `xdotool`. GTK frame clock: 60.3 fps; in-page `requestAnimationFrame`: ~62 fps; video decoded 112 frames; input-to-next-frame latencies 0.05–14.2 ms. Recorded in `docs/spike/phase-0.md` §5.2 and `docs/spike/evidence/x11-interactions-external.png`.
 - **2026-11-21** — P1-01, P1-02, P1-14 done. Added `searlx_core::domain` (`EngineId`, `PermissionKey`, `HistoryVisit`, `BookmarkTree`, `PinItem`, `TabGroupItem`, `SplitItem`, `SessionShape`), `searlx_core::data::store::DataStore` with serialized atomic writes, schema migrations, and byte-equivalent round-trip tests on all 9 legacy fixtures, and `.github/workflows/ci.yml` for macOS/Windows/Linux. Note: Phase 1 platform-independent and Linux-verifiable items proceed while `P0-G` remains `[!]` awaiting physical macOS/Windows hardware.
+- **2026-11-21** — P1-03, P1-07 done. Added redacted golden event transcript assertions in `searlx-testkit` (`tests/fixtures/lifecycle.transcript`) and full `FEATURES.md` §4.2–4.4 address parsing, IDN look-alike defence, search engines, 16 site searches, inline completion, and suggestion ranking in `searlx_core::address`, wired into `searlx-ui`.
 
 ---
 

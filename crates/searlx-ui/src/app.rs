@@ -10,7 +10,10 @@ use gpui::{
     SharedString, TitlebarOptions, Window, WindowAppearance, WindowBounds, WindowDecorations,
     WindowOptions, actions, div, point, prelude::*, px, size,
 };
-use searlx_core::PageUrl;
+use searlx_core::{
+    AddressCommand, AddressResolution, PageUrl, ParseOptions, inspect_host_lookalike,
+    resolve_address,
+};
 
 actions!(
     searlx,
@@ -161,30 +164,73 @@ impl Shell {
     }
 
     fn submit(&mut self, text: String, cx: &mut Context<Self>) {
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
-            return;
-        }
-        match PageUrl::parse(trimmed) {
-            Ok(url) => {
+        let opts = ParseOptions {
+            commands_enabled: true,
+            keywords_enabled: true,
+            ..ParseOptions::default()
+        };
+        match resolve_address(&text, &opts) {
+            AddressResolution::Navigate(url) => {
+                self.apply_tab_url(&url);
+                self.status = None;
+            }
+            AddressResolution::Search { source, query, url } => {
                 if let Some(tab) = self.tabs.get_mut(self.active) {
                     tab.address = SharedString::from(url.as_str().to_string());
-                    tab.title = url
-                        .host()
-                        .map_or_else(
-                            || url.display(),
-                            |host| host.trim_start_matches("www.").to_owned(),
-                        )
-                        .into();
+                    tab.title = format!("{query} — {source}").into();
                 }
                 self.status = None;
             }
-            Err(_) => {
-                self.status =
-                    Some("That is not an address yet — Phase 1 adds search parsing".into());
+            AddressResolution::Command(cmd) => match cmd {
+                AddressCommand::NewTab | AddressCommand::NewPrivateTab => self.new_tab(cx),
+                AddressCommand::Settings => {
+                    if let Ok(url) = PageUrl::parse("search://settings") {
+                        self.apply_tab_url(&url);
+                    }
+                }
+                AddressCommand::Bookmarks => {
+                    if let Ok(url) = PageUrl::parse("search://bookmarks") {
+                        self.apply_tab_url(&url);
+                    }
+                }
+                AddressCommand::History => {
+                    if let Ok(url) = PageUrl::parse("search://history") {
+                        self.apply_tab_url(&url);
+                    }
+                }
+                AddressCommand::Downloads => {
+                    if let Ok(url) = PageUrl::parse("search://downloads") {
+                        self.apply_tab_url(&url);
+                    }
+                }
+                AddressCommand::Passwords => {
+                    if let Ok(url) = PageUrl::parse("search://passwords") {
+                        self.apply_tab_url(&url);
+                    }
+                }
+                AddressCommand::NewSpace | AddressCommand::ToggleSidebar => {
+                    self.status = Some(cmd.label().into());
+                }
+            },
+            AddressResolution::Invalid(_) => {
+                // Invalid input shakes and does not navigate (`FEATURES.md` §3.6, §4.2).
+                self.status = Some("Invalid address".into());
             }
         }
         cx.notify();
+    }
+
+    fn apply_tab_url(&mut self, url: &PageUrl) {
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            tab.address = SharedString::from(url.as_str().to_string());
+            tab.title = url
+                .host()
+                .map_or_else(
+                    || url.display(),
+                    |host| inspect_host_lookalike(host).safe_display_host,
+                )
+                .into();
+        }
     }
 
     fn on_new_tab(&mut self, _: &NewTab, _: &mut Window, cx: &mut Context<Self>) {

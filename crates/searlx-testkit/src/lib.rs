@@ -117,6 +117,122 @@ pub fn lifecycle<E: Engine>(engine: &mut E) -> ContractResult<()> {
     Ok(())
 }
 
+/// Format a deterministic, redacted line-by-line transcript of [`EngineEvent`]s
+/// for golden-file assertions (`AGENTS.md` §8).
+///
+/// Full URLs with query values or fragments are never written; [`PageUrl::redacted`]
+/// is used everywhere.
+#[must_use]
+pub fn format_event_transcript(events: &[EngineEvent]) -> String {
+    let mut out = String::new();
+    for event in events {
+        let line = match event {
+            EngineEvent::NavigationStarted { tab, url } => {
+                format!("tab={tab} NavigationStarted url={}", url.redacted())
+            }
+            EngineEvent::NavigationCommitted { tab, url } => {
+                format!("tab={tab} NavigationCommitted url={}", url.redacted())
+            }
+            EngineEvent::NavigationFinished { tab, url } => {
+                format!("tab={tab} NavigationFinished url={}", url.redacted())
+            }
+            EngineEvent::NavigationFailed { tab, url, reason } => {
+                format!(
+                    "tab={tab} NavigationFailed url={} reason={reason}",
+                    url.redacted()
+                )
+            }
+            EngineEvent::TitleChanged { tab, title } => {
+                format!("tab={tab} TitleChanged title={title:?}")
+            }
+            EngineEvent::UrlChanged { tab, url } => {
+                format!("tab={tab} UrlChanged url={}", url.redacted())
+            }
+            EngineEvent::FaviconChanged { tab, url } => {
+                let redacted = url
+                    .as_ref()
+                    .map_or_else(|| "none".into(), PageUrl::redacted);
+                format!("tab={tab} FaviconChanged url={redacted}")
+            }
+            EngineEvent::LoadingChanged { tab, loading } => {
+                format!("tab={tab} LoadingChanged loading={loading}")
+            }
+            EngineEvent::HistoryChanged {
+                tab,
+                can_go_back,
+                can_go_forward,
+            } => {
+                format!("tab={tab} HistoryChanged back={can_go_back} forward={can_go_forward}")
+            }
+            EngineEvent::NewWindowRequested {
+                tab,
+                url,
+                disposition,
+            } => {
+                format!(
+                    "tab={tab} NewWindowRequested url={} disposition={disposition:?}",
+                    url.redacted()
+                )
+            }
+            EngineEvent::DownloadRequested {
+                tab,
+                url,
+                suggested_name,
+            } => {
+                format!(
+                    "tab={tab} DownloadRequested url={} name={suggested_name:?}",
+                    url.redacted()
+                )
+            }
+            EngineEvent::PermissionRequested { tab, origin, kind } => {
+                format!("tab={tab} PermissionRequested origin={origin} kind={kind:?}")
+            }
+            EngineEvent::ScriptDialog { tab, kind, message } => {
+                format!("tab={tab} ScriptDialog kind={kind:?} message={message:?}")
+            }
+            EngineEvent::FilePickerRequested { tab, multiple } => {
+                format!("tab={tab} FilePickerRequested multiple={multiple}")
+            }
+            EngineEvent::AuthRequired { tab, origin } => {
+                format!("tab={tab} AuthRequired origin={origin}")
+            }
+            EngineEvent::CertificateError { tab, url, reason } => {
+                format!(
+                    "tab={tab} CertificateError url={} reason={reason}",
+                    url.redacted()
+                )
+            }
+            EngineEvent::MediaStateChanged {
+                tab,
+                audible,
+                muted,
+            } => {
+                format!("tab={tab} MediaStateChanged audible={audible} muted={muted}")
+            }
+            EngineEvent::FullscreenChanged { tab, fullscreen } => {
+                format!("tab={tab} FullscreenChanged fullscreen={fullscreen}")
+            }
+            EngineEvent::ProcessCrashed { tab, reason } => {
+                format!("tab={tab} ProcessCrashed reason={reason}")
+            }
+            EngineEvent::ScriptMessage { tab, world, body } => {
+                format!("tab={tab} ScriptMessage world={world} body={body:?}")
+            }
+            EngineEvent::SnapshotReady { tab, image } => {
+                format!(
+                    "tab={tab} SnapshotReady width={} height={} bytes={}",
+                    image.width,
+                    image.height,
+                    image.png.len()
+                )
+            }
+        };
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
+}
+
 /// Assert that a committed navigation for `url` happened in `tab`.
 pub fn expect_committed(
     events: &[EngineEvent],
