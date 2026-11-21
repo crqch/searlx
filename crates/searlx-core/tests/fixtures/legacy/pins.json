@@ -1,0 +1,67 @@
+{
+  "spaces": {
+    "space-personal": [
+      {
+        "id": "pin-1",
+        "url": "https://example.com/",
+        "title": "Example",
+        "letter": "E",
+        "home": "space-personal",
+        "row": 0,
+        "shared": false,
+        "x-unknown-pin": "keep"
+      }
+    ],
+    "space-work": [
+      {
+        "id": "pin-2",
+        "url": "https://docs.example.org/",
+        "title": "Docs",
+        "letter": "D",
+        "row": 0,
+        "shared": false
+      }
+    ]
+  },
+  "shared": [
+    {
+      "id": "pin-shared-1",
+      "url": "https://search.example/",
+      "title": "Search",
+      "letter": "S",
+      "shared": true
+    }
+  ],
+  "folders": [
+    {
+      "id": "folder-1",
+      "name": "News",
+      "pins": [
+        {
+          "id": "pin-folder-1",
+          "url": "https://news.example/",
+          "title": "News",
+          "letter": "N"
+        }
+      ],
+      "feeds": [
+        {
+          "url": "https://news.example/feed.xml",
+          "title": "Example feed",
+          "refreshed_at": "2026-11-20T22:00:00Z",
+          "posts": [
+            {
+              "title": "A post",
+              "url": "https://news.example/posts/1",
+              "published": "2026-11-20T21:00:00Z",
+              "x-unknown-post": 1
+            }
+          ],
+          "x-unknown-feed": "keep"
+        }
+      ],
+      "x-unknown-folder": "keep"
+    }
+  ],
+  "x-unknown-pins": true
+}

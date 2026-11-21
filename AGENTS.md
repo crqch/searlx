@@ -127,7 +127,7 @@ Each trait has a fake for tests. A service that a platform cannot provide return
 |---|---|---|---|
 | macOS | WKWebView | Primary | Keep the original Swift app as reference where available; do not delete or rewrite it. Apple services are gated and optional. |
 | Windows | WebView2 (Evergreen) | Second | WebView2 runtime assumed; no Edge Store extension installs; passkeys via Windows Hello; extension model is BYO only. |
-| Linux | WebKitGTK (X11/XWayland first) | Experimental | No WebAuthn in WebKitGTK today. Wayland embedding is unresolved; CEF OSR is the fallback only after an ADR. |
+| Linux | WebKitGTK (X11/XWayland first) | Experimental | No WebAuthn in WebKitGTK today. gpui 0.2.2 has no Linux native-view API, so ADR-0002 proposes a GTK-native shell; Wayland focus/readback are unverified. CEF OSR is the fallback only after an ADR. |
 
 Do not add a fourth engine. Do not bundle Chromium to make the three match.
 

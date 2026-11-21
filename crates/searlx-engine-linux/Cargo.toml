@@ -11,5 +11,15 @@ searlx-core.workspace = true
 searlx-engine.workspace = true
 thiserror.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+cairo-rs = { version = "0.22", features = ["png"] }
+glib = "0.22"
+gtk = "0.19"
+webkit2gtk = { version = "3.0", features = ["v2_40"] }
+
+[[bin]]
+name = "searlx-spike-linux"
+path = "src/bin/spike.rs"
+
 [lints]
 workspace = true

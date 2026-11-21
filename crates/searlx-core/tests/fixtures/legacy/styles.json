@@ -1,0 +1,15 @@
+{
+  "sites": {
+    "example.com": {
+      "css": "body { font-family: Georgia, serif; }",
+      "enabled": true,
+      "updated": "2026-11-02T08:00:00Z",
+      "x-unknown-style": "keep"
+    },
+    "docs.example.org": {
+      "css": "main { max-width: 72ch; }",
+      "enabled": false
+    }
+  },
+  "x-unknown-styles": true
+}

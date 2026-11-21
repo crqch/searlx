@@ -1,0 +1,19 @@
+{
+  "sites": {
+    "example.com": [
+      {
+        "selector": ".cookie-banner",
+        "note": "bottom banner",
+        "created": "2026-11-01T12:00:00Z",
+        "x-unknown-rule": "keep"
+      }
+    ],
+    "docs.example.org": [
+      {
+        "selector": "#sidebar",
+        "note": "distraction"
+      }
+    ]
+  },
+  "x-unknown-hidden": true
+}

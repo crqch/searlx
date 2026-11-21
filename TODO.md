@@ -2,8 +2,8 @@
 
 **Spec:** [FEATURES.md](FEATURES.md)
 **Rules:** [AGENTS.md](AGENTS.md)
-**Status:** Phase 0 — not started
-**Last updated:** 2026-11-20
+**Status:** Phase 0 — in progress
+**Last updated:** 2026-11-21
 
 This is the live tracker. Update it in the same commit as the work. A task is done when its **Done when** line is true on every named platform, not when it compiles.
 
@@ -27,7 +27,7 @@ Platform tags: `[all]`, `[mac]`, `[win]`, `[linux]`, `[mac,win]`, `[mac,linux]`.
 
 | Phase | Done | Total | Status |
 |---|---:|---:|---|
-| 0 — Feasibility spike | 0 | 13 | In progress |
+| 0 — Feasibility spike | 5 | 13 | In progress |
 | 1 — Foundation | 0 | 16 | Not started |
 | 2 — Daily driver | 0 | 23 | Not started |
 | 3 — Identity and power | 0 | 20 | Not started |
@@ -42,14 +42,13 @@ Gates count as tasks. The "Now" section mirrors six Phase 0 items; they are not 
 
 Current focus (status lives in Phase 0 below; this is only the order):
 
-1. **P0-01** — Scaffold the Rust workspace.
-2. **P0-02** — gpui window shell.
-3. **P0-03** — macOS WKWebView embed.
-4. **P0-04** — Windows WebView2 embed.
-5. **P0-05** — Linux WebKitGTK X11 spike.
-6. **P0-06** — Linux Wayland decision spike.
+1. **P0-07** — Hard interactions prototype on the GTK shell.
+2. **P0-08** — Performance baseline with 1/10/30 tabs.
+3. **P0-03/P0-04** — macOS and Windows embedding (need hardware).
+4. **P0-05** — repeat the Linux checks on an unlocked X11 display.
+5. **P0-G** — architecture gate; blocked until the rows above have evidence.
 
-**Next gate:** P0-G — architecture confirmed. Do not start Phase 1 until P0-09 and P0-G are done.
+**Next gate:** P0-G — architecture confirmed. Do not start Phase 1 until P0-09 and P0-G are done. P0-09 is written, but P0-G is blocked on macOS/Windows evidence and real Linux input/frame-rate measurements.
 
 ---
 
@@ -75,13 +74,15 @@ Current focus (status lives in Phase 0 below; this is only the order):
   Embed WebView2 via `windows-rs` or `wry` behind the engine trait. Load two tabs; keep them alive. Place a gpui overlay above the page.
   **Done when:** same as P0-03 on Windows 11; note whether the WebView2 child window covers gpui overlays and what workaround is needed; record input latency.
 
-- [ ] **P0-05 — Linux WebKitGTK X11 spike `[linux]`**
+- [~] **P0-05 — Linux WebKitGTK X11 spike `[linux]`**
   Embed WebKitGTK in a gpui window on X11/XWayland. Load a real page. Test overlay, focus, resize, IME, video.
   **Done when:** a real page renders and scrolls at a usable frame rate; overlays and focus are possible or the limitation is measured and written down.
+  **Notes:** gpui 0.2.2 has no Linux native-view API, so WebKitGTK cannot be embedded in a gpui window yet. The spike at `crates/searlx-engine-linux/src/bin/spike.rs` measures the GTK-shell baseline instead. Measured on X11/Xwayland: `https://example.com/` finished in 296 ms, JS `scrollTo(0,240)` returned `scrollY: 240`, `grab_focus` gave the view keyboard focus, the overlay chip was visible in the window snapshot, and WebKitNetworkProcess/WebKitWebProcess children were present. Not measured: real pointer click (the handler was called programmatically), IME/emoji, frame rate, video, resize (requested 900×620 but allocation stayed 750×981), and a11y. Evidence and exact commands are in `docs/spike/phase-0.md`. Needs a retest on an unlocked X11 display.
 
-- [ ] **P0-06 — Linux Wayland decision spike `[linux]`**
+- [x] **P0-06 — Linux Wayland decision spike `[linux]`**
   Try the same on a native Wayland session. Compare: WebKitGTK child surface, XWayland, GTK-native shell, CEF OSR. Do not build a production integration yet.
   **Done when:** `docs/spike/phase-0.md` has a recommendation and the reasons; ADR-0002 is updated.
+  **Notes:** Native Wayland rendered the page and executed JS (223 ms load, `scrollY: 240`), but `grab_focus` left the view unfocused and whole-window readback was black; page snapshots still worked. Recommendation in `docs/adr/0002-linux-engine.md`: WebKitGTK in a GTK-native shell, X11/XWayland supported first, native Wayland experimental, CEF-OSR not chosen without a new ADR and measurements. This is a recorded deviation from gpui-everywhere; Linux is experimental and the engine/core contract still applies.
 
 - [ ] **P0-07 — Hard interactions prototype `[all]`**
   Build the five interactions that decide the architecture: (1) overlay menu above a page; (2) tab drag with a floating lift panel; (3) split-view divider resize; (4) IME/emoji in a page and in the field; (5) video fullscreen/PiP/floating.
@@ -91,24 +92,29 @@ Current focus (status lives in Phase 0 below; this is only the order):
   Measure cold open, new tab, tab switch, split resize, scroll, and memory with 1/10/30 tabs. Use the same page and hardware per OS. Record in `docs/spike/phase-0.md`.
   **Done when:** numbers are comparable to the Swift app and any regressions have a cause.
 
-- [ ] **P0-09 — Spike report `[all]`**
+- [x] **P0-09 — Spike report `[all]`**
   Write `docs/spike/phase-0.md`: what worked, what did not, per-OS capability table, recommended Linux engine, recommended extension strategy, risks, and a go/no-go for Phase 1.
   **Done when:** AGENTS.md platform matrix and TODO ADRs are updated from evidence.
+  **Notes:** `docs/spike/phase-0.md` records the environment, commands, X11/Wayland numbers, evidence images, what was not measured, and the recommendation. `docs/spike/capabilities.md` is the per-engine matrix and `docs/adr/0002-linux-engine.md` + `0003-extension-strategy.md` record the decisions. AGENTS.md's Linux row now says the GTK-native shell is proposed. Go/no-go is **no-go for Phase 1** until P0-G has macOS/Windows and real-input evidence; the gate is blocked, not passed.
 
-- [ ] **P0-10 — Capability matrix `[all]`**
+- [x] **P0-10 — Capability matrix `[all]`**
   Write `docs/spike/capabilities.md`: WKWebView vs WebView2 vs WebKitGTK for navigation, scripts/worlds, data stores, downloads, find, PDF/print, fullscreen/PiP, permissions, extensions, passkeys, content blockers, input/IME, a11y, and process isolation.
   **Done when:** every Tier A feature has a per-engine answer or an explicit gap.
+  **Notes:** `docs/spike/capabilities.md` has all requested rows plus custom UA, proxy, and snapshots, marked measured/documented/unverified. Hard gaps are explicit: WebKitGTK has no extensions and no WebAuthn; WebView2 extensions are unpacked-only; WKWebView is the only full extension path. Tier A app features are marked as core/UI work, with the engine dependency named. Unverified rows are listed so P0-03/P0-04/P0-07/P0-08 do not inherit false confidence.
 
-- [ ] **P0-11 — Data compatibility fixture `[all]`**
+- [x] **P0-11 — Data compatibility fixture `[all]`**
   Create a small corpus of existing Search data files (session, history, bookmarks, pins, spaces, hidden, styles) and a round-trip reader in `searlx-core`. No UI yet.
   **Done when:** fixtures parse; unknown fields survive; corrupt files quarantine; tests pass.
+  **Notes:** `searlx-core::data` has serde models for session/space sessions, windows, pins (including live-feed folders), spaces, bookmarks, history, hidden selectors, and styles. `read_json` quarantines a corrupt file as `*.unreadable-<UTC>.json` without overwriting an earlier quarantine; `write_json` writes a temp sibling then renames. Nine fixtures live in `crates/searlx-core/tests/fixtures/legacy`; tests cover parse, unknown fields at the top level and inside nested objects, corrupt-file quarantine with bytes intact, missing files (not quarantined), and write/read. The original Swift source and real data files are absent, so the shapes are inferred from FEATURES.md §25; the fixture README records that assumption. Real old files still need to replace these fixtures in P1-02/P1-12.
 
-- [ ] **P0-12 — Phase 0 security checklist `[all]`**
+- [x] **P0-12 — Phase 0 security checklist `[all]`**
   Threat-model the new shell: private stores, password fill, agent tabs, extension boundaries, update signing, imported files, URL redaction.
   **Done when:** checklist is in `docs/spike/phase-0.md` and every item has an owner or a Phase 1 task.
+  **Notes:** `docs/spike/security-checklist.md` has 42 items across private stores, password fill/origin checks, agent tabs, extension boundaries, update signing, imports, URL redaction, quarantine, and logging. Each row has risk, required behaviour, verification method, and an owner task (P1/P2/P4). It ends with six open questions. Linked from `docs/spike/phase-0.md` §10. This is a requirements checklist, not a claim that the current shell implements it.
 
-- [ ] **P0-G — Gate: architecture confirmed `[all]`**
+- [!] **P0-G — Gate: architecture confirmed `[all]`**
   Confirm ADR-0001 (gpui + system webviews), ADR-0002 (Linux engine), ADR-0003 (extension strategy), and ADR-0004 (no bundled Chromium by default). If the gate fails, stop and revise the plan before Phase 1.
+  **Blocked on:** macOS WKWebView embed (P0-03), Windows WebView2 embed (P0-04), real pointer/IME/frame-rate/video checks on Linux (P0-05/P0-07), and the 1/10/30-tab baseline (P0-08). ADR-0004 is accepted; ADR-0001 is accepted for macOS/Windows and provisional for Linux; ADR-0002 and ADR-0003 are proposed with recommendations. **Reason:** this environment has no macOS or Windows machine and the Linux session is locked, so the gate cannot be passed honestly. **Owner:** project lead. **Exact verification:** run `docs/spike/phase-0.md` §12 rows on real hardware, then re-run this gate. Do not start Phase 1 on the strength of the Linux evidence alone.
 
 ---
 
@@ -499,33 +505,30 @@ Current focus (status lives in Phase 0 below; this is only the order):
 Create `docs/adr/NNNN-title.md` for each. Status: proposed/accepted/superseded.
 
 ### ADR-0001 — gpui + system webviews
-**Status:** proposed. **Decision:** gpui for chrome; WKWebView/WebView2/WebKitGTK for pages; no bundled Chromium by default.
+**Status:** accepted for macOS/Windows, provisional for Linux — [0001-gpui-and-system-webviews.md](docs/adr/0001-gpui-and-system-webviews.md). **Decision:** gpui for chrome; WKWebView/WebView2/WebKitGTK for pages; no bundled Chromium by default.
 **Why:** product feel, small binaries, no second engine, platform-native security updates.
 **Risk:** three capability sets; Linux embedding; gpui pre-1.0.
-**Decided by:** P0-09/P0-G.
 
 ### ADR-0002 — Linux engine
-**Status:** open. **Options:** (a) WebKitGTK X11/XWayland; (b) CEF off-screen; (c) GTK-native shell; (d) no Linux.
-**Decision:** pending P0-05/P0-06.
+**Status:** proposed — [0002-linux-engine.md](docs/adr/0002-linux-engine.md). **Decision:** WebKitGTK in a GTK-native shell; X11/XWayland supported first, native Wayland experimental; CEF-OSR only after a new ADR and measurements. **Why:** WebKitGTK renders and scripts pages on both backends, but gpui 0.2.2 cannot host a Linux native view. **Risk:** a second chrome implementation; Wayland focus/readback unproven.
 
 ### ADR-0003 — Extension strategy
-**Status:** open. **Options:** (a) macOS-only WKWebExtension; (b) macOS-only + WebView2 BYO; (c) CEF everywhere; (d) drop.
-**Decision:** pending P0-10.
+**Status:** proposed — [0003-extension-strategy.md](docs/adr/0003-extension-strategy.md). **Decision:** macOS-only WKWebExtension first; Windows unpacked-only and gated; Linux none. **Why:** that is what the engines actually support; no fake API surface.
 
 ### ADR-0004 — Bundled engine
-**Status:** proposed no. The default build must not bundle Chromium. A separate "Search Max" build would need a new ADR.
+**Status:** accepted — [0004-no-bundled-engine.md](docs/adr/0004-no-bundled-engine.md). The default build must not bundle Chromium. A separate "Search Max" build would need a new ADR.
 
 ### ADR-0005 — Passkeys on Linux
-**Status:** open. WebKitGTK has no WebAuthn today. Options: no passkeys; CEF; external-browser handoff (not a real solution).
+**Status:** proposed — [0005-passkeys-on-linux.md](docs/adr/0005-passkeys-on-linux.md). No passkeys in the default WebKitGTK build; macOS/Windows use the system authenticator. No custom software authenticator or fake shim.
 
 ### ADR-0006 — Sync backend
-**Status:** open. Folder sync is the portable baseline; iCloud is macOS-only; a server contradicts the no-account promise.
+**Status:** proposed — [0006-sync-backend.md](docs/adr/0006-sync-backend.md). Folder sync is the portable baseline; iCloud is an optional macOS layer; no hosted account or server.
 
 ### ADR-0007 — Existing Swift app
-**Status:** proposed keep. The Swift macOS app remains the reference and can ship while the Rust app matures. Do not rewrite it in gpui.
+**Status:** accepted — [0007-existing-swift-app.md](docs/adr/0007-existing-swift-app.md). The Swift macOS app remains the reference and can ship while the Rust app matures. Do not rewrite it in gpui.
 
 ### ADR-0008 — Distribution and update
-**Status:** open. macOS notarized DMG/Sparkle-like; Windows MSIX/Squirrel; Linux Flatpak/AppImage. One signed feed per channel.
+**Status:** proposed — [0008-distribution-and-update.md](docs/adr/0008-distribution-and-update.md). macOS notarized DMG + signed feed; Windows MSIX/Squirrel; Linux Flatpak primary/AppImage fallback; one signed feed per channel; no auto-relaunch.
 
 ---
 
@@ -533,6 +536,7 @@ Create `docs/adr/NNNN-title.md` for each. Status: proposed/accepted/superseded.
 
 | Risk | Impact | Mitigation | Owner |
 |---|---|---|---|
+| gpui 0.2.2 cannot host a Linux native view | Linux needs a second chrome or CEF | ADR-0002 GTK-native shell; revisit if gpui adds a native-view API | P0 |
 | Linux Wayland cannot host a WebKitGTK page cleanly | Linux may need CEF or a GTK shell | P0-06, ADR-0002; timebox, do not commit early | P0 |
 | WebView2 child window covers gpui overlays | Menus/popovers above page break on Windows | P0-04; test composition; fallback to a popup window | P0 |
 | Floating video reparenting differs per engine | Signature feature breaks | P0-07; design a portable player fallback | P0 |
@@ -546,12 +550,16 @@ Create `docs/adr/NNNN-title.md` for each. Status: proposed/accepted/superseded.
 
 ## Blockers
 
-_None yet._
+- **P0-03 / P0-04 / P0-G — no macOS or Windows machine in this environment.** The code and docs are ready; the embedding, overlay, focus, and resize checks need real hardware. Owner: project lead. See `docs/spike/phase-0.md` §12 for the exact steps.
+- **P0-05 / P0-07 / P0-08 — the Linux session is locked by `swaylock`.** Programmatic GTK events and page snapshots work; real pointer, keyboard, IME, video, and frame-rate checks need an unlocked display. Owner: whoever has the session.
+- **Subagents — OpenCode Go monthly usage limit reached / Insufficient balance.** Delegation to `opencode-go/deepseek-v4.1-flash` failed before doing work; the work continues directly. This is a tooling blocker, not a product decision.
 
 ## Progress log
 
 - **2026-11-20** — Created `AGENTS.md` and `TODO.md`. Phase 0 not started. The original Swift checkout is no longer present in this working tree; `FEATURES.md` is the behavioural source of truth.
 - **2026-11-21** — P0-01/P0-02 underway. Rust workspace, eight crates, gpui shell, engine contract, fake engine, platform traits/fakes, testkit contract test, toolchain/CI/docs skeleton. `cargo check`, `fmt`, `clippy -D warnings`, and `cargo test --workspace` pass on Linux; the binary launches. Committed directly to `main` as requested; no remote push.
+- **2026-11-21** — P0-11 done. `searlx-core::data` models and nine inferred fixtures; unknown fields survive, corrupt files quarantine without overwriting, `write_json` is atomic. 17 core tests pass.
+- **2026-11-21** — P0-06/P0-09/P0-10/P0-12 done; P0-05 partial. Linux WebKitGTK spike ran on X11/Xwayland and native Wayland: real page, JS scroll, overlay visible (X11), focus on X11, WebKit child processes, page snapshots; Wayland focus/readback failed in the locked session. gpui 0.2.2 cannot host a Linux native view, so ADR-0002 recommends a GTK-native shell (X11/XWayland first). Wrote `docs/spike/phase-0.md`, `capabilities.md`, `security-checklist.md`, ADR-0001..0008, and copied evidence PNGs. P0-G is blocked on macOS/Windows hardware and real Linux input/frame-rate checks. `cargo fmt`, `clippy -D warnings`, and `cargo test --workspace` pass; 17 tests.
 
 ---
 

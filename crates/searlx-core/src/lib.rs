@@ -4,6 +4,7 @@
 //! history, bookmarks, sessions, imports, fuzzy matching, rules, data-file
 //! codecs, and migrations. It must not depend on a UI toolkit or a web engine.
 
+pub mod data;
 pub mod error;
 pub mod ids;
 pub mod url;

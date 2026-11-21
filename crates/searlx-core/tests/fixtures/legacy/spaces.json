@@ -1,0 +1,26 @@
+{
+  "spaces": [
+    {
+      "id": "space-personal",
+      "name": "Personal",
+      "color": "#3b74f2",
+      "icon": "person",
+      "gradient": "dusk",
+      "strength": 0.62,
+      "profile": "profile-personal",
+      "store_sharing": "own",
+      "downloads_folder": "~/Downloads",
+      "x-unknown-space": "keep"
+    },
+    {
+      "id": "space-work",
+      "name": "Work",
+      "color": "#27a07a",
+      "icon": "briefcase",
+      "profile": "profile-work",
+      "store_sharing": "shared"
+    }
+  ],
+  "order_kept": true,
+  "x-unknown-spaces": "keep"
+}

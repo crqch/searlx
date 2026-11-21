@@ -1,0 +1,47 @@
+{
+  "version": 3,
+  "active": 1,
+  "tabs": [
+    {
+      "id": "tab-1",
+      "url": "https://example.com/",
+      "title": "Example Domain",
+      "pinned": true,
+      "muted": false,
+      "sleeping": false,
+      "x-unknown-tab": "keep-tab-1"
+    },
+    {
+      "id": "tab-2",
+      "url": "search://history",
+      "title": "History",
+      "group": "group-1",
+      "scroll": {
+        "x": 0,
+        "y": 420,
+        "x-unknown-scroll": true
+      },
+      "x-unknown-tab": 42
+    }
+  ],
+  "groups": [
+    {
+      "id": "group-1",
+      "name": "Research",
+      "color": "#3b74f2",
+      "collapsed": false,
+      "tab_ids": ["tab-2"],
+      "x-unknown-group": true
+    }
+  ],
+  "splits": [
+    {
+      "id": "split-1",
+      "axis": "vertical",
+      "ratio": 0.5,
+      "first": "tab-1",
+      "second": "tab-2"
+    }
+  ],
+  "x-unknown-top": "keep-me"
+}

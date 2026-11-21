@@ -1,0 +1,42 @@
+{
+  "version": 2,
+  "roots": [
+    {
+      "id": "folder-bar",
+      "title": "Bookmarks Bar",
+      "kind": "folder",
+      "children": [
+        {
+          "id": "bookmark-1",
+          "title": "Example",
+          "url": "https://example.com/",
+          "kind": "bookmark",
+          "x-unknown-bookmark": "keep"
+        },
+        {
+          "id": "folder-nested",
+          "title": "Nested",
+          "kind": "folder",
+          "children": [
+            {
+              "id": "bookmark-2",
+              "title": "Docs",
+              "url": "https://docs.example.org/",
+              "x-unknown-nested": 7
+            }
+          ]
+        }
+      ],
+      "x-unknown-root-folder": true
+    }
+  ],
+  "imported_from": [
+    {
+      "source": "Chrome",
+      "imported_at": "2026-10-01T09:30:00Z",
+      "count": 2,
+      "x-unknown-import": "keep"
+    }
+  ],
+  "x-unknown-bookmarks": true
+}

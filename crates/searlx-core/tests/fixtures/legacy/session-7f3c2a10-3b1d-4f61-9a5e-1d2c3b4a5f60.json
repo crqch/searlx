@@ -1,0 +1,16 @@
+{
+  "version": 3,
+  "active": 0,
+  "tabs": [
+    {
+      "id": "tab-work-1",
+      "url": "https://docs.example.org/guide",
+      "title": "Guide",
+      "profile": "profile-work",
+      "x-unknown-space-tab": "keep"
+    }
+  ],
+  "groups": [],
+  "splits": [],
+  "x-unknown-space": "work"
+}

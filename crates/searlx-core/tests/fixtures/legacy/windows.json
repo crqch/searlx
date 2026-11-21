@@ -1,0 +1,37 @@
+{
+  "windows": [
+    {
+      "id": "window-1",
+      "frame": {
+        "x": 80,
+        "y": 64,
+        "width": 1180,
+        "height": 780,
+        "x-unknown-frame": "keep"
+      },
+      "space": "space-personal",
+      "active": 1,
+      "rows": {
+        "space-personal": [
+          {
+            "id": "tab-window-1",
+            "url": "https://example.net/",
+            "title": "Example Net"
+          }
+        ],
+        "space-work": [
+          {
+            "id": "tab-window-2",
+            "url": "https://example.org/",
+            "title": "Example Org"
+          }
+        ]
+      },
+      "merged": false,
+      "tucked": true,
+      "folded": false,
+      "x-unknown-window": "keep"
+    }
+  ],
+  "x-unknown-windows": true
+}

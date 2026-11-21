@@ -1,0 +1,22 @@
+{
+  "visits": [
+    {
+      "url": "https://example.com/",
+      "title": "Example Domain",
+      "visit_count": 12,
+      "first_visit": "2026-10-01T09:30:00Z",
+      "last_visit": "2026-11-20T18:12:44Z",
+      "space": "space-personal",
+      "profile": "profile-personal",
+      "x-unknown-visit": "keep"
+    },
+    {
+      "url": "https://docs.example.org/guide",
+      "title": "Guide",
+      "visit_count": 3,
+      "first_visit": "2026-11-01T10:00:00+01:00",
+      "last_visit": "2026-11-19T16:00:00+01:00"
+    }
+  ],
+  "x-unknown-history": true
+}
