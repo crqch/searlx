@@ -29,12 +29,12 @@ Platform tags: `[all]`, `[mac]`, `[win]`, `[linux]`, `[mac,win]`, `[mac,linux]`.
 |---|---:|---:|---|
 | 0 — Feasibility spike | 6 | 13 | In progress |
 | 1 — Foundation | 10 | 16 | In progress |
-| 2 — Daily driver | 0 | 23 | Not started |
+| 2 — Daily driver | 5 | 23 | In progress |
 | 3 — Identity and power | 0 | 20 | Not started |
 | 4 — Platform and parity | 0 | 16 | Not started |
 | 5 — Linux and hardening | 0 | 11 | Not started |
 | Continuous | 0 | 8 | Not started |
-| **Total** | **16** | **107** | |
+| **Total** | **21** | **107** | |
 
 Gates count as tasks. The "Now" section mirrors six Phase 0 items; they are not counted twice.
 
@@ -205,25 +205,30 @@ Current focus (status lives in Phase 0 below; this is only the order):
 
 **Goal:** replace the old browser for ordinary browsing.
 
-- [ ] **P2-01 — Navigation and history `[all]`**
+- [x] **P2-01 — Navigation and history `[all]`**
   Back/forward, long-press history menu, reload/stop/origin, redirects, errors, per-tab history, internal-page trail, scroll restoration.
   **Done when:** a 50-link session behaves like the spec; Back from the first page does nothing; errors are in-page.
+  **Notes:** `crates/searlx-core/src/navigation.rs` implements `TabNavigation` with per-tab back/forward stack, scroll restoration, redirect collapsing, long-press & 8-item swipe-hold history menus, separate `search://` internal-page trail, small-window back-at-start close check, and `InPageError` state. Verified with a 50-link session unit test.
 
-- [ ] **P2-02 — Find on page `[all]`**
+- [x] **P2-02 — Find on page `[all]`**
   Pill, count, next/prev, match case, whole words, PDF fallback, 1,000 limit, isolated world, search settings on the settings tab.
   **Done when:** matches the spec's status strings; a 1,000-match page stays responsive.
+  **Notes:** `crates/searlx-core/src/find.rs` implements `FindSession`, `FindTarget` (routing `search://settings*` to Settings search and `.pdf` to PDF fallback with `whole_words` disabled), status strings (`"3 of 17"`, `"1 of 1,000+"`, `"0 of 0"`), 1,000-match cap, wrap-around next/previous, and `ISOLATED_WORLD_FIND_JS`. A 2,500-match page completes in <5 ms.
 
-- [ ] **P2-03 — History page `[all]`**
+- [x] **P2-03 — History page `[all]`**
   Grouped by day, search, remove one, clear all/scope, 2,000 cap, frecency suggestions, no date range.
   **Done when:** clearing history behaves exactly as FEATURES.md §10 says, including archive/favicons/site searches.
+  **Notes:** `crates/searlx-core/src/history.rs` implements `HistoryManager` with 2,000 disk cap and 2,250 memory cap (frecency pruning), `"Today"`/`"Yesterday"`/`"YYYY-MM-DD"` day grouping, single-substring search, single-row removal, no date-range deletion, 500-cap auto-closed archive, 10-cap recently closed stack, and `clear_history` (wiping all or a signed-out space's visits plus archive, link-chooser memories, favicons, learned site searches, and stripping download source URLs while keeping download rows).
 
-- [ ] **P2-04 — Bookmarks `[all]`**
+- [x] **P2-04 — Bookmarks `[all]`**
   Tree, add/edit/delete/move, bar, menu, page, search, suggestions, import merge, no export writer.
   **Done when:** nested folders and 1,500 imported bookmarks open quickly; drag/drop reorder works.
+  **Notes:** `crates/searlx-core/src/bookmarks.rs` implements `BookmarksManager` with `Add This Page` vs `Edit Bookmark…` detection, add/rename/edit/remove (returning removed link count), drag/drop `move_node` with cycle/descendant rejection, `bar_items`, `search_all_words` with folder paths, and no export writer. Tested with 1,500 bookmarks across 15 nested folders.
 
-- [ ] **P2-05 — Downloads `[all]`**
+- [x] **P2-05 — Downloads `[all]`**
   Tab/popover/panel, destination/ask, pause/resume/retry/cancel, naming, progress, no Notification Center, private unlisted.
   **Done when:** a 1 GB download pauses/resumes; a POST download says it cannot pause; a private download is not listed.
+  **Notes:** `crates/searlx-core/src/downloads.rs` implements `DownloadsManager` with 1 GB `GET` pause/resume, `POST`/body refusal (`"POST or form downloads cannot be paused"`), `" 2"`/`" 3"` duplicate numbering, path traversal sanitization, 50-row persistence cap, `uses_notification_center() == false`, and private downloads excluded from `listed_entries()` while counted in `global_active_progress()`.
 
 - [ ] **P2-06 — Reader `[all]`**
   Extraction heuristic, Markdown twin, light/dark/system, images/tables/code, reload on exit.
@@ -580,6 +585,7 @@ Create `docs/adr/NNNN-title.md` for each. Status: proposed/accepted/superseded.
 - **2026-11-21** — P1-01, P1-02, P1-14 done. Added `searlx_core::domain` (`EngineId`, `PermissionKey`, `HistoryVisit`, `BookmarkTree`, `PinItem`, `TabGroupItem`, `SplitItem`, `SessionShape`), `searlx_core::data::store::DataStore` with serialized atomic writes, schema migrations, and byte-equivalent round-trip tests on all 9 legacy fixtures, and `.github/workflows/ci.yml` for macOS/Windows/Linux. Note: Phase 1 platform-independent and Linux-verifiable items proceed while `P0-G` remains `[!]` awaiting physical macOS/Windows hardware.
 - **2026-11-21** — P1-03, P1-07 done. Added redacted golden event transcript assertions in `searlx-testkit` (`tests/fixtures/lifecycle.transcript`) and full `FEATURES.md` §4.2–4.4 address parsing, IDN look-alike defence, search engines, 16 site searches, inline completion, and suggestion ranking in `searlx_core::address`, wired into `searlx-ui`.
 - **2026-11-21** — P1-08, P1-09, P1-10, P1-11, P1-12 done; P1-06 core+UI landed. Added `searlx_core::session` (asleep restore, 30-tab <10 ms restore, fresh-start mode, private-tab filtering, corrupt-file quarantine), `searlx_core::settings` (typed settings, 11 `search://settings/<slug>` pages, synonym search with parent-dimming), `searlx_core::commands` (`CommandRegistry`, `⌘S` folds sidebar, conflict & reserved-key rejection), `searlx_core::import` (`O_NOFOLLOW`, symlink rejection, 64 MiB cap, asleep tab import, idempotent merge), `searlx_core::tabs` (`TabModel` + unified `DragSession`), and high-contrast/reduce-motion/1x-2x icon helpers in `searlx-ui`.
+- **2026-11-21** — P2-01..P2-05 done; P1-13 packaging skeleton landed. Added `searlx_core::navigation` (50-link session stack, redirect collapse, swipe-hold 8-item menu, internal-page trail, in-page error model), `searlx_core::find` (`"3 of 17"` / `"1 of 1,000+"` status strings, 1,000 cap, PDF whole-words fallback, Settings-tab routing), `searlx_core::history` (2,000/2,250 caps, day grouping, full clear side effects), `searlx_core::bookmarks` (1,500-bookmark tree, cycle-safe move, remove count, no export writer), and `searlx_core::downloads` (1 GB GET pause/resume, POST pause refusal, duplicate numbering, private unlisted).
 
 ---
 
