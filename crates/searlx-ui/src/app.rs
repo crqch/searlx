@@ -17,7 +17,17 @@ use searlx_core::{
 
 actions!(
     searlx,
-    [NewTab, CloseTab, FocusAddress, NextTab, PreviousTab, Quit]
+    [
+        NewTab,
+        CloseTab,
+        FocusAddress,
+        NextTab,
+        PreviousTab,
+        ToggleSidebar,
+        OpenSettings,
+        PinActiveTab,
+        Quit
+    ]
 );
 
 /// The default key bindings for the shell.
@@ -30,6 +40,10 @@ pub fn shell_key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("ctrl-w", CloseTab, None),
         KeyBinding::new("cmd-l", FocusAddress, None),
         KeyBinding::new("ctrl-l", FocusAddress, None),
+        KeyBinding::new("cmd-s", ToggleSidebar, None),
+        KeyBinding::new("ctrl-s", ToggleSidebar, None),
+        KeyBinding::new("cmd-,", OpenSettings, None),
+        KeyBinding::new("ctrl-,", OpenSettings, None),
         KeyBinding::new("ctrl-tab", NextTab, None),
         KeyBinding::new("ctrl-shift-tab", PreviousTab, None),
         KeyBinding::new("cmd-q", Quit, None),
@@ -40,6 +54,10 @@ pub fn shell_key_bindings() -> Vec<KeyBinding> {
 struct TabState {
     title: SharedString,
     address: SharedString,
+    pinned: bool,
+    sleeping: bool,
+    audible: bool,
+    muted: bool,
 }
 
 impl TabState {
@@ -47,6 +65,10 @@ impl TabState {
         Self {
             title: title.into(),
             address: address.into(),
+            pinned: false,
+            sleeping: false,
+            audible: false,
+            muted: false,
         }
     }
 }
@@ -55,6 +77,9 @@ impl TabState {
 pub struct Shell {
     tabs: Vec<TabState>,
     active: usize,
+    folded: bool,
+    icons_only: bool,
+    high_contrast: bool,
     field: gpui::Entity<AddressField>,
     focus_handle: FocusHandle,
     palette: Palette,
@@ -82,7 +107,11 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Self {
         cx.observe_window_appearance(window, |shell, window, cx| {
-            let next = Palette::for_theme(shell.theme, is_dark(window.appearance()));
+            let next = Palette::for_theme_with_contrast(
+                shell.theme,
+                is_dark(window.appearance()),
+                shell.high_contrast,
+            );
             if next != shell.palette {
                 shell.palette = next;
                 shell.field.update(cx, |field, cx| {
@@ -110,6 +139,9 @@ impl Shell {
                 TabState::new("searlx — design notes", "https://example.com/design"),
             ],
             active: 0,
+            folded: false,
+            icons_only: false,
+            high_contrast: false,
             field,
             focus_handle: cx.focus_handle(),
             palette,
@@ -122,7 +154,38 @@ impl Shell {
     fn activate(&mut self, index: usize, cx: &mut Context<Self>) {
         if index < self.tabs.len() {
             self.active = index;
+            self.tabs[index].sleeping = false;
             self.status = None;
+            cx.notify();
+        }
+    }
+
+    fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.folded = !self.folded;
+        cx.notify();
+    }
+
+    fn open_settings_tab(&mut self, cx: &mut Context<Self>) {
+        if let Some(existing) = self
+            .tabs
+            .iter()
+            .position(|t| t.address.as_ref().starts_with("search://settings"))
+        {
+            self.activate(existing, cx);
+            return;
+        }
+        self.tabs.insert(
+            self.active + 1,
+            TabState::new("Settings", "search://settings"),
+        );
+        self.active += 1;
+        self.status = None;
+        cx.notify();
+    }
+
+    fn toggle_pin_active(&mut self, cx: &mut Context<Self>) {
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            tab.pinned = !tab.pinned;
             cx.notify();
         }
     }
@@ -183,11 +246,7 @@ impl Shell {
             }
             AddressResolution::Command(cmd) => match cmd {
                 AddressCommand::NewTab | AddressCommand::NewPrivateTab => self.new_tab(cx),
-                AddressCommand::Settings => {
-                    if let Ok(url) = PageUrl::parse("search://settings") {
-                        self.apply_tab_url(&url);
-                    }
-                }
+                AddressCommand::Settings => self.open_settings_tab(cx),
                 AddressCommand::Bookmarks => {
                     if let Ok(url) = PageUrl::parse("search://bookmarks") {
                         self.apply_tab_url(&url);
@@ -208,7 +267,8 @@ impl Shell {
                         self.apply_tab_url(&url);
                     }
                 }
-                AddressCommand::NewSpace | AddressCommand::ToggleSidebar => {
+                AddressCommand::ToggleSidebar => self.toggle_sidebar(cx),
+                AddressCommand::NewSpace => {
                     self.status = Some(cmd.label().into());
                 }
             },
@@ -255,6 +315,18 @@ impl Shell {
         self.cycle(-1, cx);
     }
 
+    fn on_toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_sidebar(cx);
+    }
+
+    fn on_open_settings(&mut self, _: &OpenSettings, _: &mut Window, cx: &mut Context<Self>) {
+        self.open_settings_tab(cx);
+    }
+
+    fn on_pin_active_tab(&mut self, _: &PinActiveTab, _: &mut Window, cx: &mut Context<Self>) {
+        self.toggle_pin_active(cx);
+    }
+
     fn on_quit(&mut self, _: &Quit, _: &mut Window, cx: &mut Context<Self>) {
         cx.quit();
     }
@@ -263,8 +335,16 @@ impl Shell {
         let tab = &self.tabs[index];
         let active = index == self.active;
         let palette = self.palette;
-        let title = tab.title.clone();
+        let title = if tab.sleeping {
+            SharedString::from(format!("{} (asleep)", tab.title))
+        } else if tab.audible && !tab.muted {
+            SharedString::from(format!("♪ {}", tab.title))
+        } else {
+            tab.title.clone()
+        };
         let is_last = self.tabs.len() == 1;
+        let close_glyph = if tab.pinned { "−" } else { "×" };
+        let icons_only = self.icons_only;
         div()
             .id(("tab", index))
             .flex()
@@ -303,16 +383,18 @@ impl Shell {
                             .map_or_else(|| "·".to_string(), |c| c.to_uppercase().to_string()),
                     ),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_size(px(12.5))
-                    .text_color(if active { palette.text } else { palette.muted })
-                    .child(title),
-            )
-            .when(!is_last, |row| {
+            .when(!icons_only, |row| {
+                row.child(
+                    div()
+                        .flex_1()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_size(px(12.5))
+                        .text_color(if active { palette.text } else { palette.muted })
+                        .child(title),
+                )
+            })
+            .when(!is_last && !icons_only, |row| {
                 row.child(
                     div()
                         .id(("close", index))
@@ -325,7 +407,7 @@ impl Shell {
                         .text_size(px(12.0))
                         .text_color(palette.muted)
                         .hover(move |style| style.bg(palette.hover).text_color(palette.text))
-                        .child("×")
+                        .child(close_glyph)
                         .on_mouse_up(
                             MouseButton::Left,
                             cx.listener(move |shell, _, _, cx| {
@@ -347,7 +429,7 @@ impl Focusable for Shell {
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dark = is_dark(window.appearance());
-        let palette = Palette::for_theme(self.theme, dark);
+        let palette = Palette::for_theme_with_contrast(self.theme, dark, self.high_contrast);
         if palette != self.palette {
             self.palette = palette;
             self.field.update(cx, |field, cx| {
@@ -360,6 +442,12 @@ impl Render for Shell {
         let address = active.address.clone();
         let title = active.title.clone();
         let status = self.status.clone();
+        let sidebar_width = if self.icons_only {
+            metrics::SIDEBAR_ICONS
+        } else {
+            metrics::SIDEBAR_DEFAULT
+        };
+        let folded = self.folded;
 
         div()
             .flex()
@@ -368,80 +456,81 @@ impl Render for Shell {
             .bg(palette.ground)
             .text_color(palette.text)
             .font_family("Inter")
-            .child(
-                // Tab column. Phase 0 shows the left-column layout only.
-                div()
-                    .flex()
-                    .flex_col()
-                    .w(px(metrics::SIDEBAR_DEFAULT))
-                    .h_full()
-                    .bg(wash.map_or(palette.chrome, Into::into))
-                    .border_r_1()
-                    .border_color(palette.line)
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap_2()
-                            .px_3()
-                            .h(px(38.0))
-                            .child(
-                                div()
-                                    .size(px(metrics::SPACE_DOT))
-                                    .rounded_full()
-                                    .bg(palette.accent),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(11.0))
-                                    .text_color(palette.muted)
-                                    .child("Personal"),
-                            )
-                            .child(div().flex_1())
-                            .child(
-                                div()
-                                    .id("new-tab")
-                                    .w(px(22.0))
-                                    .h(px(22.0))
-                                    .rounded(px(6.0))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .text_size(px(16.0))
-                                    .text_color(palette.muted)
-                                    .cursor_pointer()
-                                    .hover(move |style| {
-                                        style.bg(palette.hover).text_color(palette.text)
-                                    })
-                                    .child("+")
-                                    .on_mouse_up(
-                                        MouseButton::Left,
-                                        cx.listener(|shell, _, _, cx| shell.new_tab(cx)),
-                                    ),
-                            ),
-                    )
-                    .child(div().flex().flex_col().gap_0p5().py_1().children({
-                        let mut rows = Vec::with_capacity(self.tabs.len());
-                        for index in 0..self.tabs.len() {
-                            rows.push(self.tab_row(index, cx));
-                        }
-                        rows
-                    }))
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .px_3()
-                            .py_2()
-                            .text_size(px(10.5))
-                            .text_color(palette.muted)
-                            .child(format!(
-                                "{} tab{}",
-                                self.tabs.len(),
-                                if self.tabs.len() == 1 { "" } else { "s" }
-                            )),
-                    ),
-            )
+            .when(!folded, |root| {
+                root.child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .w(px(sidebar_width))
+                        .h_full()
+                        .bg(wash.map_or(palette.chrome, Into::into))
+                        .border_r_1()
+                        .border_color(palette.line)
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap_2()
+                                .px_3()
+                                .h(px(38.0))
+                                .child(
+                                    div()
+                                        .size(px(metrics::SPACE_DOT))
+                                        .rounded_full()
+                                        .bg(palette.accent),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(11.0))
+                                        .text_color(palette.muted)
+                                        .child("Personal"),
+                                )
+                                .child(div().flex_1())
+                                .child(
+                                    div()
+                                        .id("new-tab")
+                                        .w(px(22.0))
+                                        .h(px(22.0))
+                                        .rounded(px(6.0))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .text_size(px(16.0))
+                                        .text_color(palette.muted)
+                                        .cursor_pointer()
+                                        .hover(move |style| {
+                                            style.bg(palette.hover).text_color(palette.text)
+                                        })
+                                        .child("+")
+                                        .on_mouse_up(
+                                            MouseButton::Left,
+                                            cx.listener(|shell, _, _, cx| shell.new_tab(cx)),
+                                        ),
+                                ),
+                        )
+                        .child(div().flex().flex_col().gap_0p5().py_1().children({
+                            let mut rows = Vec::with_capacity(self.tabs.len());
+                            for index in 0..self.tabs.len() {
+                                rows.push(self.tab_row(index, cx));
+                            }
+                            rows
+                        }))
+                        .child(div().flex_1())
+                        .child(
+                            div()
+                                .px_3()
+                                .py_2()
+                                .text_size(px(10.5))
+                                .text_color(palette.muted)
+                                .child(format!(
+                                    "{} tab{}",
+                                    self.tabs.len(),
+                                    if self.tabs.len() == 1 { "" } else { "s" }
+                                )),
+                        ),
+                )
+            })
             .child(
                 div()
                     .flex()
@@ -571,6 +660,9 @@ impl Render for Shell {
             .on_action(cx.listener(Self::on_focus_address))
             .on_action(cx.listener(Self::on_next_tab))
             .on_action(cx.listener(Self::on_previous_tab))
+            .on_action(cx.listener(Self::on_toggle_sidebar))
+            .on_action(cx.listener(Self::on_open_settings))
+            .on_action(cx.listener(Self::on_pin_active_tab))
             .on_action(cx.listener(Self::on_quit))
     }
 }

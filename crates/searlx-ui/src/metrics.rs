@@ -69,10 +69,62 @@ pub mod motion {
     pub const DIVIDER_HOVER: u64 = 100;
     /// What everything collapses to when Reduce Motion is on.
     pub const MOTION_REDUCED: u64 = 0;
+
+    /// Resolve an animation duration in milliseconds, collapsing to `0` when
+    /// Reduce Motion is active (`AGENTS.md` §3.3, P1-10).
+    #[must_use]
+    pub const fn duration_ms(base_ms: u64, reduce_motion: bool) -> u64 {
+        if reduce_motion {
+            MOTION_REDUCED
+        } else {
+            base_ms
+        }
+    }
+}
+
+/// Tab glyph box size in logical points (`1x`).
+pub const GLYPH_SIZE_PT: f32 = 18.0;
+
+/// Scale a design font/metric value by the user or platform text scale factor
+/// (`0.75..=2.5`, P1-10).
+#[must_use]
+pub fn scaled_pt(value: f32, scale: f32) -> Pixels {
+    let clamped = if scale.is_finite() {
+        scale.clamp(0.75, 2.5)
+    } else {
+        1.0
+    };
+    px(value * clamped)
+}
+
+/// Raster icon pixel size for a logical point size at a display scale factor
+/// (`1.0` for 1x, `2.0` for 2x Retina/HiDPI; P1-10).
+#[must_use]
+pub fn icon_device_px(logical_pt: f32, scale_factor: f32) -> u32 {
+    let factor = if scale_factor.is_finite() {
+        scale_factor.clamp(1.0, 4.0)
+    } else {
+        1.0
+    };
+    (logical_pt * factor).round().max(1.0) as u32
 }
 
 /// Convert a design number in points to gpui pixels.
 #[must_use]
 pub fn pt(value: f32) -> Pixels {
     px(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reduce_motion_collapses_durations_and_icons_scale_1x_2x() {
+        assert_eq!(motion::duration_ms(motion::PILL, false), 180);
+        assert_eq!(motion::duration_ms(motion::PILL, true), 0);
+        assert_eq!(icon_device_px(GLYPH_SIZE_PT, 1.0), 18);
+        assert_eq!(icon_device_px(GLYPH_SIZE_PT, 2.0), 36);
+        assert_eq!(scaled_pt(12.0, 1.5), px(18.0));
+    }
 }

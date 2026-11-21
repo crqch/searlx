@@ -1,0 +1,812 @@
+//! Unified tab row model, chrome layout state, and single drag session (`FEATURES.md` §2.2, §3.1–3.6, `AGENTS.md` §3.3, P1-06).
+//!
+//! Key rules:
+//! - **One drag session model** ([`DragSession`]) handles tabs, pins, groups,
+//!   pin folders, split-edge drops, and window detachment (`AGENTS.md` §3.3).
+//! - **Close semantics (`⌘W`, `FEATURES.md` §3.2):**
+//!   - A pinned tab is **put down** (page released / `sleeping = true`, wakes
+//!     at `home` when `pins_home` is on), not removed.
+//!   - An awake tab in a group is **put away** (`sleeping = true`, `put_away = true`);
+//!     closing an already put-away grouped tab deletes it.
+//!   - Closing the last non-pin tab creates a fresh blank tab.
+//! - **New tab (`⌘T`, `FEATURES.md` §3.2):** reuses an existing blank ungrouped
+//!   tab if one exists; otherwise inserts at `Next`, `Top`, or `End`.
+//! - **Fold (`⌘S`, `FEATURES.md` §2.2):** folds/unfolds the sidebar, or toggles
+//!   icons-only mode when `fold_to_icons` is enabled.
+
+use serde::{Deserialize, Serialize};
+
+use crate::error::{CoreError, Result};
+use crate::ids::{GroupId, PinId, TabId, TabIdAllocator};
+use crate::settings::{NewTabPlace, TabLayoutMode};
+use crate::url::PageUrl;
+
+/// Visual state of a single tab or pin in the row (`FEATURES.md` §3.1).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TabEntry {
+    /// Runtime tab handle.
+    pub id: TabId,
+    /// Current committed or target URL.
+    pub url: PageUrl,
+    /// Home URL when pinned (`FEATURES.md` §7.1).
+    pub home: Option<PageUrl>,
+    /// Display title.
+    pub title: String,
+    /// Custom user-assigned title (`Rename`); a named tab is "kept" and never auto-closes (`FEATURES.md` §3.2, §3.5).
+    pub custom_name: Option<String>,
+    /// Optional favicon URL.
+    pub favicon: Option<PageUrl>,
+    /// Single-character letter glyph.
+    pub letter: char,
+    /// Whether this tab is pinned in the front section.
+    pub pinned: bool,
+    /// Stable pin UUID when pinned.
+    pub pin_id: Option<PinId>,
+    /// Optional tab group membership.
+    pub group: Option<GroupId>,
+    /// Whether a grouped tab has been "put away" by `⌘W` (`FEATURES.md` §3.2).
+    pub put_away: bool,
+    /// Whether a navigation is currently loading.
+    pub loading: bool,
+    /// Whether the tab is producing audio.
+    pub audible: bool,
+    /// Whether audio is muted.
+    pub muted: bool,
+    /// Whether the tab's web view is released and replaced by its sleep placeholder.
+    pub sleeping: bool,
+    /// Snapshot label/description shown while sleeping (`FEATURES.md` §3.1, §3.6).
+    pub sleep_placeholder: Option<String>,
+    /// Whether this tab uses an ephemeral private store (`⇧⌘N`).
+    pub private: bool,
+    /// Reading scroll progress `0.0..=1.0` (`tabs.reading`, `FEATURES.md` §3.1).
+    pub reading_progress: f32,
+}
+
+impl TabEntry {
+    /// Create a new tab entry.
+    #[must_use]
+    pub fn new(id: TabId, url: PageUrl, title: impl Into<String>, private: bool) -> Self {
+        let title = title.into();
+        let letter = compute_letter(&url, &title);
+        Self {
+            id,
+            url,
+            home: None,
+            title,
+            custom_name: None,
+            favicon: None,
+            letter,
+            pinned: false,
+            pin_id: None,
+            group: None,
+            put_away: false,
+            loading: false,
+            audible: false,
+            muted: false,
+            sleeping: false,
+            sleep_placeholder: None,
+            private,
+            reading_progress: 0.0,
+        }
+    }
+
+    /// Whether the tab is blank (`search://` or `about:blank`) and not in a group or pin.
+    #[must_use]
+    pub fn is_reusable_blank(&self) -> bool {
+        !self.private
+            && !self.pinned
+            && self.group.is_none()
+            && matches!(self.url.as_str(), "search://" | "about:blank")
+    }
+
+    /// Effective title shown in the row.
+    #[must_use]
+    pub fn display_title(&self) -> &str {
+        self.custom_name.as_deref().unwrap_or(&self.title)
+    }
+
+    /// Whether this tab is protected from auto-close ("kept", `FEATURES.md` §3.5).
+    #[must_use]
+    pub fn is_kept(&self) -> bool {
+        self.pinned || self.custom_name.is_some() || self.group.is_some()
+    }
+}
+
+fn compute_letter(url: &PageUrl, title: &str) -> char {
+    url.host()
+        .and_then(|h| h.trim_start_matches("www.").chars().next())
+        .or_else(|| title.trim().chars().next())
+        .map_or('·', |c| c.to_ascii_uppercase())
+}
+
+/// Which edge of a page a dragged tab is hovering over for Split View creation (`FEATURES.md` §3.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SplitDropSide {
+    /// Left band (`max(120 pt, 24% of page width)`).
+    Left,
+    /// Right band (`max(120 pt, 24% of page width)`).
+    Right,
+}
+
+/// What item is being carried in a [`DragSession`] (`AGENTS.md` §3.3).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DragPayload {
+    /// An ordinary or pinned tab.
+    Tab(TabId),
+    /// A whole tab group by its heading.
+    Group(GroupId),
+    /// A pin folder by its identifier.
+    PinFolder(String),
+}
+
+/// Where a [`DragSession`] will land if released (`AGENTS.md` §3.3, `FEATURES.md` §3.3).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DropTarget {
+    /// Drop onto the pin section at `index` (pins the tab if it was loose).
+    PinSlot(usize),
+    /// Drop into the loose tab list at `index` (unpins the tab if it was a pin).
+    LooseTabSlot(usize),
+    /// Drop into a tab group at `index`.
+    GroupSlot {
+        /// Target group.
+        group: GroupId,
+        /// Position within the group.
+        index: usize,
+    },
+    /// Drop into a pin folder.
+    PinFolderSlot {
+        /// Target folder ID.
+        folder_id: String,
+    },
+    /// Drop onto the left or right edge band of a page to create/join a Split View.
+    PageSplitEdge {
+        /// Page tab being split.
+        target_tab: TabId,
+        /// Left or right side.
+        side: SplitDropSide,
+    },
+    /// Dragged outside the window past the 12 pt slack to detach into a new window (`FEATURES.md` §3.3).
+    DetachWindow,
+}
+
+/// Unified drag session state machine for tabs, pins, groups, folders, and split drops (`AGENTS.md` §3.3).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DragSession {
+    /// Item being dragged.
+    pub payload: DragPayload,
+    /// Starting pointer X in window coordinates.
+    pub origin_x: f64,
+    /// Starting pointer Y in window coordinates.
+    pub origin_y: f64,
+    /// Current pointer X in window coordinates.
+    pub current_x: f64,
+    /// Current pointer Y in window coordinates.
+    pub current_y: f64,
+    /// True once pointer travel exceeds the 5 pt threshold (`FEATURES.md` §3.6),
+    /// cancelling tab-give press scale and activating the floating lift preview.
+    pub active: bool,
+    /// Current drop target under the pointer.
+    pub target: Option<DropTarget>,
+}
+
+impl DragSession {
+    /// Pointer travel threshold (5 pt) before a press becomes a drag (`FEATURES.md` §3.6).
+    pub const DRAG_THRESHOLD_PT: f64 = 5.0;
+    /// Slack outside the window (12 pt) before a loose tab detaches (`FEATURES.md` §3.3).
+    pub const WINDOW_DETACH_SLACK_PT: f64 = 12.0;
+
+    /// Begin a potential drag gesture at `(x, y)`.
+    #[must_use]
+    pub const fn begin(payload: DragPayload, x: f64, y: f64) -> Self {
+        Self {
+            payload,
+            origin_x: x,
+            origin_y: y,
+            current_x: x,
+            current_y: y,
+            active: false,
+            target: None,
+        }
+    }
+
+    /// Update pointer coordinates and target.
+    pub fn update(&mut self, x: f64, y: f64, target: Option<DropTarget>) {
+        self.current_x = x;
+        self.current_y = y;
+        let dx = x - self.origin_x;
+        let dy = y - self.origin_y;
+        if (dx * dx + dy * dy).sqrt() > Self::DRAG_THRESHOLD_PT {
+            self.active = true;
+        }
+        if self.active {
+            self.target = target;
+        }
+    }
+
+    /// Test whether `(x, y)` inside a page rect of width `page_width` falls in
+    /// the left or right split drop band (`max(120 pt, 24% of page)`, `FEATURES.md` §3.3).
+    #[must_use]
+    pub fn classify_page_split_band(local_x: f64, page_width: f64) -> Option<SplitDropSide> {
+        if page_width <= 0.0 || local_x < 0.0 || local_x > page_width {
+            return None;
+        }
+        let band = (page_width * 0.24).max(120.0).min(page_width * 0.45);
+        if local_x <= band {
+            Some(SplitDropSide::Left)
+        } else if local_x >= page_width - band {
+            Some(SplitDropSide::Right)
+        } else {
+            None
+        }
+    }
+}
+
+/// Complete tab row, layout, and drag controller (`P1-06`).
+#[derive(Clone, Debug)]
+pub struct TabModel {
+    tabs: Vec<TabEntry>,
+    active: usize,
+    previous_active: Option<usize>,
+    layout: TabLayoutMode,
+    folded: bool,
+    fold_to_icons: bool,
+    layout_before_fold_icons: Option<TabLayoutMode>,
+    new_tab_place: NewTabPlace,
+    close_goes_back: bool,
+    pins_go_home: bool,
+    drag: Option<DragSession>,
+}
+
+impl TabModel {
+    /// Create a tab model with an initial blank tab.
+    pub fn new(allocator: &mut TabIdAllocator) -> Result<Self> {
+        let id = allocator.allocate();
+        let blank = TabEntry::new(id, PageUrl::parse("search://")?, "New Tab", false);
+        Ok(Self {
+            tabs: vec![blank],
+            active: 0,
+            previous_active: None,
+            layout: TabLayoutMode::LeftColumn,
+            folded: false,
+            fold_to_icons: false,
+            layout_before_fold_icons: None,
+            new_tab_place: NewTabPlace::Next,
+            close_goes_back: false,
+            pins_go_home: true,
+            drag: None,
+        })
+    }
+
+    /// Slice of all tabs (pins always precede loose tabs).
+    #[must_use]
+    pub fn tabs(&self) -> &[TabEntry] {
+        &self.tabs
+    }
+
+    /// Mutable access to a tab by ID.
+    pub fn tab_mut(&mut self, id: TabId) -> Option<&mut TabEntry> {
+        self.tabs.iter_mut().find(|t| t.id == id)
+    }
+
+    /// Lookup a tab by ID.
+    #[must_use]
+    pub fn tab(&self, id: TabId) -> Option<&TabEntry> {
+        self.tabs.iter().find(|t| t.id == id)
+    }
+
+    /// Currently active tab index.
+    #[must_use]
+    pub const fn active_index(&self) -> usize {
+        self.active
+    }
+
+    /// Currently active tab entry.
+    #[must_use]
+    pub fn active_tab(&self) -> &TabEntry {
+        &self.tabs[self.active]
+    }
+
+    /// Mutable reference to the currently active tab entry.
+    pub fn active_tab_mut(&mut self) -> &mut TabEntry {
+        &mut self.tabs[self.active]
+    }
+
+    /// Current layout mode (`LeftColumn`, `RightColumn`, `TopTabs`, `IconsOnly`).
+    #[must_use]
+    pub const fn layout(&self) -> TabLayoutMode {
+        self.layout
+    }
+
+    /// Set the chrome layout mode.
+    pub fn set_layout(&mut self, layout: TabLayoutMode) {
+        self.layout = layout;
+        self.layout_before_fold_icons = None;
+    }
+
+    /// Whether the sidebar/strip is currently folded (`⌘S`).
+    #[must_use]
+    pub const fn is_folded(&self) -> bool {
+        self.folded
+    }
+
+    /// Configure whether `⌘S` toggles `IconsOnly` instead of hiding the column (`sidebar.foldIcons`, `FEATURES.md` §2.2).
+    pub fn set_fold_to_icons(&mut self, enabled: bool) {
+        self.fold_to_icons = enabled;
+    }
+
+    /// Configure new-tab placement (`Next`, `Top`, `End`).
+    pub fn set_new_tab_place(&mut self, place: NewTabPlace) {
+        self.new_tab_place = place;
+    }
+
+    /// Configure whether closing the active tab returns to the previously active tab.
+    pub fn set_close_goes_back(&mut self, enabled: bool) {
+        self.close_goes_back = enabled;
+    }
+
+    /// Configure whether `⌘W` on a pin resets its URL to `home` (`pins.home`).
+    pub fn set_pins_go_home(&mut self, enabled: bool) {
+        self.pins_go_home = enabled;
+    }
+
+    /// Toggle sidebar fold (`⌘S`, `FEATURES.md` §2.2).
+    pub fn toggle_fold(&mut self) {
+        if self.fold_to_icons && self.layout != TabLayoutMode::TopTabs {
+            if let Some(prev) = self.layout_before_fold_icons.take() {
+                self.layout = prev;
+            } else if self.layout == TabLayoutMode::IconsOnly {
+                self.layout = TabLayoutMode::LeftColumn;
+            } else {
+                self.layout_before_fold_icons = Some(self.layout);
+                self.layout = TabLayoutMode::IconsOnly;
+            }
+            self.folded = false;
+        } else {
+            self.folded = !self.folded;
+        }
+    }
+
+    /// Select a tab by index, waking it if it was asleep (`FEATURES.md` §3.2).
+    pub fn select_index(&mut self, index: usize) -> Option<TabId> {
+        if index >= self.tabs.len() {
+            return None;
+        }
+        if index != self.active {
+            self.previous_active = Some(self.active);
+            self.active = index;
+        }
+        let tab = &mut self.tabs[self.active];
+        tab.sleeping = false;
+        tab.put_away = false;
+        Some(tab.id)
+    }
+
+    /// Select a tab by ID.
+    pub fn select_tab(&mut self, id: TabId) -> bool {
+        if let Some(index) = self.tabs.iter().position(|t| t.id == id) {
+            self.select_index(index);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Number of pinned tabs at the front of the row.
+    #[must_use]
+    pub fn pin_count(&self) -> usize {
+        self.tabs.iter().take_while(|t| t.pinned).count()
+    }
+
+    /// Open a new tab (`⌘T` or `⇧⌘N`, `FEATURES.md` §3.2).
+    ///
+    /// For non-private blank tabs, reuses an existing ungrouped blank tab if one
+    /// exists; otherwise inserts at the configured [`NewTabPlace`].
+    pub fn create_tab(
+        &mut self,
+        allocator: &mut TabIdAllocator,
+        url: Option<PageUrl>,
+        title: impl Into<String>,
+        private: bool,
+        activate: bool,
+    ) -> Result<TabId> {
+        let is_blank_request = url.is_none();
+        if !private
+            && is_blank_request
+            && let Some(existing_idx) = self.tabs.iter().position(TabEntry::is_reusable_blank)
+        {
+            if activate {
+                self.select_index(existing_idx);
+            }
+            return Ok(self.tabs[existing_idx].id);
+        }
+
+        let target_url = match url {
+            Some(u) => u,
+            None => PageUrl::parse("search://")?,
+        };
+        let id = allocator.allocate();
+        let entry = TabEntry::new(id, target_url, title, private);
+
+        let pin_boundary = self.pin_count();
+        let insert_idx = match self.new_tab_place {
+            NewTabPlace::Top => pin_boundary,
+            NewTabPlace::End => self.tabs.len(),
+            NewTabPlace::Next => (self.active + 1).max(pin_boundary).min(self.tabs.len()),
+        };
+
+        if insert_idx <= self.active && !self.tabs.is_empty() {
+            self.active += 1;
+        }
+        self.tabs.insert(insert_idx, entry);
+        if activate {
+            self.previous_active = Some(self.active);
+            self.active = insert_idx;
+        }
+        Ok(id)
+    }
+
+    /// Close a tab (`⌘W`, `FEATURES.md` §3.2):
+    /// - A pinned tab is **put down** (`sleeping = true`, returns to `home` if `pins_go_home`).
+    /// - An awake grouped tab is **put away** (`sleeping = true`, `put_away = true`);
+    ///   closing a put-away grouped tab removes it.
+    /// - Removing the last tab creates a fresh blank tab.
+    pub fn close_tab(&mut self, id: TabId, allocator: &mut TabIdAllocator) -> Result<()> {
+        let Some(index) = self.tabs.iter().position(|t| t.id == id) else {
+            return Err(CoreError::Invalid(format!("no such tab: {id}")));
+        };
+
+        if self.tabs[index].pinned {
+            let tab = &mut self.tabs[index];
+            tab.sleeping = true;
+            tab.loading = false;
+            tab.audible = false;
+            if self.pins_go_home
+                && let Some(home) = tab.home.clone()
+            {
+                tab.url = home;
+            }
+            return Ok(());
+        }
+
+        if self.tabs[index].group.is_some() && !self.tabs[index].put_away {
+            let tab = &mut self.tabs[index];
+            tab.sleeping = true;
+            tab.put_away = true;
+            tab.loading = false;
+            tab.audible = false;
+            return Ok(());
+        }
+
+        self.tabs.remove(index);
+        if self.tabs.is_empty() || self.tabs.iter().all(|t| t.pinned) {
+            let blank_id = allocator.allocate();
+            let blank = TabEntry::new(blank_id, PageUrl::parse("search://")?, "New Tab", false);
+            self.tabs.push(blank);
+            self.active = self.tabs.len() - 1;
+            self.previous_active = None;
+            return Ok(());
+        }
+
+        if self.close_goes_back
+            && index == self.active
+            && let Some(prev) = self.previous_active.take()
+        {
+            let adjusted = if prev > index { prev - 1 } else { prev };
+            if adjusted < self.tabs.len() {
+                self.active = adjusted;
+                self.tabs[self.active].sleeping = false;
+                return Ok(());
+            }
+        }
+
+        if self.active >= self.tabs.len() {
+            self.active = self.tabs.len() - 1;
+        } else if index < self.active {
+            self.active -= 1;
+        }
+        self.tabs[self.active].sleeping = false;
+        Ok(())
+    }
+
+    /// Pin a tab to the front section (`FEATURES.md` §3.2, §7.1).
+    /// Private tabs cannot be pinned.
+    pub fn pin_tab(&mut self, id: TabId) -> Result<PinId> {
+        let Some(index) = self.tabs.iter().position(|t| t.id == id) else {
+            return Err(CoreError::Invalid(format!("no such tab: {id}")));
+        };
+        if self.tabs[index].private {
+            return Err(CoreError::Invalid("private tabs cannot be pinned".into()));
+        }
+        if self.tabs[index].pinned {
+            return Ok(self.tabs[index].pin_id.unwrap_or_default());
+        }
+
+        let active_id = self.tabs[self.active].id;
+        let mut entry = self.tabs.remove(index);
+        let pin_id = PinId::new();
+        entry.pinned = true;
+        entry.pin_id = Some(pin_id);
+        entry.home = Some(entry.url.clone());
+        entry.group = None;
+        entry.put_away = false;
+
+        let dest = self.pin_count();
+        self.tabs.insert(dest, entry);
+        self.restore_active_by_id(active_id);
+        Ok(pin_id)
+    }
+
+    /// Unpin a pinned tab, moving it to the start of the loose tabs (`FEATURES.md` §7.1).
+    pub fn unpin_tab(&mut self, id: TabId) -> Result<()> {
+        let Some(index) = self.tabs.iter().position(|t| t.id == id) else {
+            return Err(CoreError::Invalid(format!("no such tab: {id}")));
+        };
+        if !self.tabs[index].pinned {
+            return Ok(());
+        }
+
+        let active_id = self.tabs[self.active].id;
+        let mut entry = self.tabs.remove(index);
+        entry.pinned = false;
+        entry.pin_id = None;
+        entry.home = None;
+
+        let dest = self.pin_count();
+        self.tabs.insert(dest, entry);
+        self.restore_active_by_id(active_id);
+        Ok(())
+    }
+
+    /// Put a background tab to sleep (`Put to Sleep`, `FEATURES.md` §3.2).
+    /// Disabled for the active tab, a playing tab, or a loading tab.
+    pub fn put_to_sleep(&mut self, id: TabId) -> Result<()> {
+        if self.tabs[self.active].id == id {
+            return Err(CoreError::Invalid(
+                "the active on-screen tab cannot be put to sleep".into(),
+            ));
+        }
+        let tab = self
+            .tab_mut(id)
+            .ok_or_else(|| CoreError::Invalid(format!("no such tab: {id}")))?;
+        if tab.audible || tab.loading {
+            return Err(CoreError::Invalid(
+                "a busy or audible tab cannot be put to sleep".into(),
+            ));
+        }
+        tab.sleeping = true;
+        tab.sleep_placeholder = Some(tab.display_title().to_owned());
+        Ok(())
+    }
+
+    /// Start a drag session (`AGENTS.md` §3.3).
+    pub fn begin_drag(&mut self, payload: DragPayload, x: f64, y: f64) {
+        self.drag = Some(DragSession::begin(payload, x, y));
+    }
+
+    /// Active drag session, if any.
+    #[must_use]
+    pub const fn drag_session(&self) -> Option<&DragSession> {
+        self.drag.as_ref()
+    }
+
+    /// Update the active drag session pointer and drop target.
+    pub fn update_drag(&mut self, x: f64, y: f64, target: Option<DropTarget>) {
+        if let Some(drag) = &mut self.drag {
+            drag.update(x, y, target);
+        }
+    }
+
+    /// Cancel any in-progress drag session.
+    pub fn cancel_drag(&mut self) {
+        self.drag = None;
+    }
+
+    /// Commit the active drag session and apply its drop operation (`FEATURES.md` §3.3).
+    pub fn commit_drag(&mut self) -> Result<Option<DropTarget>> {
+        let Some(session) = self.drag.take() else {
+            return Ok(None);
+        };
+        if !session.active {
+            return Ok(None);
+        }
+        let Some(target) = session.target else {
+            return Ok(None);
+        };
+
+        if let DragPayload::Tab(tab_id) = session.payload {
+            match &target {
+                DropTarget::PinSlot(slot) => {
+                    if !self.tab(tab_id).is_some_and(|t| t.pinned) {
+                        self.pin_tab(tab_id)?;
+                    }
+                    let pin_count = self.pin_count();
+                    let clamped = (*slot).min(pin_count.saturating_sub(1));
+                    self.move_tab_to_index(tab_id, clamped)?;
+                }
+                DropTarget::LooseTabSlot(slot) => {
+                    if self.tab(tab_id).is_some_and(|t| t.pinned) {
+                        self.unpin_tab(tab_id)?;
+                    }
+                    let pin_count = self.pin_count();
+                    let clamped = (*slot).max(pin_count).min(self.tabs.len() - 1);
+                    self.move_tab_to_index(tab_id, clamped)?;
+                }
+                DropTarget::GroupSlot { group, index } => {
+                    if self.tab(tab_id).is_some_and(|t| t.pinned) {
+                        self.unpin_tab(tab_id)?;
+                    }
+                    if let Some(tab) = self.tab_mut(tab_id) {
+                        tab.group = Some(*group);
+                    }
+                    let pin_count = self.pin_count();
+                    let clamped = (*index).max(pin_count).min(self.tabs.len() - 1);
+                    self.move_tab_to_index(tab_id, clamped)?;
+                }
+                DropTarget::PinFolderSlot { .. }
+                | DropTarget::PageSplitEdge { .. }
+                | DropTarget::DetachWindow => {}
+            }
+        }
+        Ok(Some(target))
+    }
+
+    /// Move `id` to `target_index` within its section (pins or loose tabs).
+    pub fn move_tab_to_index(&mut self, id: TabId, target_index: usize) -> Result<()> {
+        let Some(from) = self.tabs.iter().position(|t| t.id == id) else {
+            return Err(CoreError::Invalid(format!("no such tab: {id}")));
+        };
+        let active_id = self.tabs[self.active].id;
+        let entry = self.tabs.remove(from);
+        let pin_count = self.tabs.iter().take_while(|t| t.pinned).count();
+        let dest = if entry.pinned {
+            target_index.min(pin_count)
+        } else {
+            target_index.max(pin_count).min(self.tabs.len())
+        };
+        self.tabs.insert(dest, entry);
+        self.restore_active_by_id(active_id);
+        Ok(())
+    }
+
+    fn restore_active_by_id(&mut self, active_id: TabId) {
+        if let Some(idx) = self.tabs.iter().position(|t| t.id == active_id) {
+            self.active = idx;
+        } else {
+            self.active = self.active.min(self.tabs.len().saturating_sub(1));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_reuses_blank_and_pin_unpin_reorders_across_boundary() {
+        let mut alloc = TabIdAllocator::new();
+        let mut model = TabModel::new(&mut alloc).expect("new model");
+        let first_id = model.active_tab().id;
+
+        // Creating a blank tab while an ungrouped blank tab exists reuses it (`FEATURES.md` §3.2).
+        let reused_id = model
+            .create_tab(&mut alloc, None, "New Tab", false, true)
+            .expect("reuse blank");
+        assert_eq!(reused_id, first_id);
+        assert_eq!(model.tabs().len(), 1);
+
+        // Navigate first tab, then create a second and third tab.
+        model.active_tab_mut().url = PageUrl::parse("https://example.com/one").expect("url 1");
+        model.active_tab_mut().title = "One".into();
+
+        let second_id = model
+            .create_tab(
+                &mut alloc,
+                Some(PageUrl::parse("https://example.com/two").expect("url 2")),
+                "Two",
+                false,
+                true,
+            )
+            .expect("tab 2");
+        let third_id = model
+            .create_tab(
+                &mut alloc,
+                Some(PageUrl::parse("https://example.com/three").expect("url 3")),
+                "Three",
+                false,
+                true,
+            )
+            .expect("tab 3");
+        assert_eq!(model.tabs().len(), 3);
+
+        // Pinning the third tab moves it to index 0 ahead of loose tabs.
+        model.pin_tab(third_id).expect("pin tab 3");
+        assert_eq!(model.tabs()[0].id, third_id);
+        assert!(model.tabs()[0].pinned);
+        assert_eq!(model.pin_count(), 1);
+
+        // Dragging second_id onto PinSlot(0) pins it and puts it at slot 0.
+        model.begin_drag(DragPayload::Tab(second_id), 10.0, 10.0);
+        model.update_drag(30.0, 10.0, Some(DropTarget::PinSlot(0)));
+        model.commit_drag().expect("commit pin drag");
+        assert_eq!(model.pin_count(), 2);
+        assert_eq!(model.tabs()[0].id, second_id);
+        assert!(model.tabs()[0].pinned);
+
+        // Dragging second_id back to LooseTabSlot(2) unpins it.
+        model.begin_drag(DragPayload::Tab(second_id), 10.0, 10.0);
+        model.update_drag(10.0, 90.0, Some(DropTarget::LooseTabSlot(2)));
+        model.commit_drag().expect("commit unpin drag");
+        assert_eq!(model.pin_count(), 1);
+        assert!(!model.tab(second_id).expect("tab 2").pinned);
+    }
+
+    #[test]
+    fn close_puts_down_pins_and_puts_away_grouped_tabs() {
+        let mut alloc = TabIdAllocator::new();
+        let mut model = TabModel::new(&mut alloc).expect("model");
+        let first_id = model.active_tab().id;
+        model.active_tab_mut().url = PageUrl::parse("https://news.ycombinator.com/").expect("home");
+        model.pin_tab(first_id).expect("pin");
+
+        // Wander away from home, then close with ⌘W: pin stays, sleeps, and returns home.
+        model.tab_mut(first_id).expect("pin").url =
+            PageUrl::parse("https://example.com/away").expect("away");
+        model.close_tab(first_id, &mut alloc).expect("put down pin");
+        let pin = model.tab(first_id).expect("pin still exists");
+        assert!(pin.sleeping);
+        assert_eq!(pin.url.as_str(), "https://news.ycombinator.com/");
+
+        // Grouped tab: first close puts it away; second close removes it.
+        let grouped_id = model
+            .create_tab(
+                &mut alloc,
+                Some(PageUrl::parse("https://example.com/grouped").expect("url")),
+                "Grouped",
+                false,
+                true,
+            )
+            .expect("create grouped");
+        let gid = GroupId::new();
+        model.tab_mut(grouped_id).expect("grouped").group = Some(gid);
+
+        model
+            .close_tab(grouped_id, &mut alloc)
+            .expect("first close puts away");
+        let grouped = model.tab(grouped_id).expect("still in group");
+        assert!(grouped.put_away);
+        assert!(grouped.sleeping);
+
+        model
+            .close_tab(grouped_id, &mut alloc)
+            .expect("second close deletes");
+        assert!(model.tab(grouped_id).is_none());
+    }
+
+    #[test]
+    fn fold_toggles_sidebar_or_icons_only_and_classifies_split_bands() {
+        let mut alloc = TabIdAllocator::new();
+        let mut model = TabModel::new(&mut alloc).expect("model");
+        assert!(!model.is_folded());
+        model.toggle_fold();
+        assert!(model.is_folded());
+        model.toggle_fold();
+        assert!(!model.is_folded());
+
+        model.set_fold_to_icons(true);
+        model.toggle_fold();
+        assert_eq!(model.layout(), TabLayoutMode::IconsOnly);
+        assert!(!model.is_folded());
+        model.toggle_fold();
+        assert_eq!(model.layout(), TabLayoutMode::LeftColumn);
+
+        assert_eq!(
+            DragSession::classify_page_split_band(40.0, 1000.0),
+            Some(SplitDropSide::Left)
+        );
+        assert_eq!(DragSession::classify_page_split_band(500.0, 1000.0), None);
+        assert_eq!(
+            DragSession::classify_page_split_band(920.0, 1000.0),
+            Some(SplitDropSide::Right)
+        );
+    }
+}

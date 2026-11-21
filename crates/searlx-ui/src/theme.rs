@@ -75,6 +75,25 @@ impl Palette {
             Theme::System => Self::light(),
         }
     }
+
+    /// Resolve a theme preference with optional high-contrast strengthening
+    /// (`tabs.highContrast`, `FEATURES.md` §21, P1-10).
+    #[must_use]
+    pub fn for_theme_with_contrast(theme: Theme, system_dark: bool, high_contrast: bool) -> Self {
+        let mut palette = Self::for_theme(theme, system_dark);
+        if high_contrast {
+            if theme.is_dark(system_dark) {
+                palette.text = rgb(0xFFFFFF).into();
+                palette.muted = rgb(0xD4D0CB).into();
+                palette.line = rgb(0x605C58).into();
+            } else {
+                palette.text = rgb(0x000000).into();
+                palette.muted = rgb(0x3D3A37).into();
+                palette.line = rgb(0x8C8883).into();
+            }
+        }
+        palette
+    }
 }
 
 /// The user's appearance preference.
@@ -139,4 +158,37 @@ impl SpaceTint {
 #[must_use]
 pub fn focus_ring(palette: &Palette) -> Hsla {
     hsla(palette.accent.h, palette.accent.s, palette.accent.l, 0.55)
+}
+
+/// Compute a tab's single-letter glyph from its host or title (`FEATURES.md` §3.1, P1-10).
+#[must_use]
+pub fn tab_glyph_letter(title: &str, host: Option<&str>) -> char {
+    host.and_then(|h| h.trim_start_matches("www.").chars().next())
+        .or_else(|| title.trim().chars().next())
+        .map_or('·', |c| c.to_uppercase().next().unwrap_or(c))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn high_contrast_strengthens_text_and_muted_colors() {
+        let normal_light = Palette::for_theme_with_contrast(Theme::Light, false, false);
+        let hc_light = Palette::for_theme_with_contrast(Theme::Light, false, true);
+        assert_ne!(normal_light.text, hc_light.text);
+        assert_ne!(normal_light.muted, hc_light.muted);
+
+        let normal_dark = Palette::for_theme_with_contrast(Theme::Dark, true, false);
+        let hc_dark = Palette::for_theme_with_contrast(Theme::Dark, true, true);
+        assert_ne!(normal_dark.text, hc_dark.text);
+        assert_ne!(normal_dark.muted, hc_dark.muted);
+    }
+
+    #[test]
+    fn tab_glyph_prefers_clean_host_initial() {
+        assert_eq!(tab_glyph_letter("Example", Some("www.github.com")), 'G');
+        assert_eq!(tab_glyph_letter("Settings", None), 'S');
+        assert_eq!(tab_glyph_letter("", None), '·');
+    }
 }

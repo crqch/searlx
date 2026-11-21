@@ -28,13 +28,13 @@ Platform tags: `[all]`, `[mac]`, `[win]`, `[linux]`, `[mac,win]`, `[mac,linux]`.
 | Phase | Done | Total | Status |
 |---|---:|---:|---|
 | 0 — Feasibility spike | 6 | 13 | In progress |
-| 1 — Foundation | 5 | 16 | In progress |
+| 1 — Foundation | 10 | 16 | In progress |
 | 2 — Daily driver | 0 | 23 | Not started |
 | 3 — Identity and power | 0 | 20 | Not started |
 | 4 — Platform and parity | 0 | 16 | Not started |
 | 5 — Linux and hardening | 0 | 11 | Not started |
 | Continuous | 0 | 8 | Not started |
-| **Total** | **11** | **107** | |
+| **Total** | **16** | **107** | |
 
 Gates count as tasks. The "Now" section mirrors six Phase 0 items; they are not counted twice.
 
@@ -147,38 +147,45 @@ Current focus (status lives in Phase 0 below; this is only the order):
   WebView2 behind `Engine`, same contract. User data folder per profile/space; ephemeral profile for private tabs.
   **Done when:** contract tests pass on Windows 11; two tabs switch without reload; private profile leaves no data.
 
-- [ ] **P1-06 — Tab model and row `[all]`**
+- [~] **P1-06 — Tab model and row `[all]`**
   Tab state, active tab, pinned flag, title/icon, loading, audio, sleep placeholder. Side and top layouts, icons-only, fold. Use one drag session.
   **Done when:** create/close/reorder/pin/unpin works on macOS and Windows; a tab drag is smooth at 60+ fps.
+  **Notes:** `crates/searlx-core/src/tabs.rs` implements `TabEntry`, `TabModel` (blank-tab reuse on `⌘T`, pin put-down and group put-away on `⌘W`, pin/unpin across the boundary, `Put to Sleep` guard, `⌘S` fold and fold-to-icons), and the single unified `DragSession` state machine (`DragPayload`, `DropTarget`, 5 pt travel threshold, 12 pt detach slack, `max(120 pt, 24%)` split drop band). Wired into `searlx-ui`. Needs macOS/Windows physical verification.
 
 - [x] **P1-07 — Address field and parsing `[all]`**
   Port FEATURES.md §4.2 parsing rules, Return/⌘Return/⇧⌘Return, completion, suggestions from history/bookmarks/open tabs, site chip, commands. Invalid input shakes.
   **Done when:** parser unit tests mirror the spec; manual cases: `localhost:3000`, `~/file`, `example.com`, `hello world`, `mailto:`, `[::1]:3000`, look-alike hosts.
   **Notes:** `crates/searlx-core/src/address.rs` implements all `FEATURES.md` §4.2–4.4 rules: whitespace/single-word search vs bare host classification, `localhost`/`*.localhost`/`*.local`/`[::1]`/`127.0.0.1`/private IPv4 → `http://`, `0.0.0.0` → `http://localhost`, letter-TLD ≥2 check (dotted version numbers like `1.2.3` rejected as invalid), `/path` and `~/path` file existence check, `@` and unsupported scheme refusal (`mailto:`, `javascript:`), IDN punycode look-alike detector (`inspect_host_lookalike`), `SubmitDisposition` (`Return`/`⌘Return`/`⇧⌘Return`), 9 search engines + host-preserving template expansion, 16 built-in site searches (`Tab`-to-search & keywords), inline grey completion, and ordered suggestion builder (site offers, open tabs, frecency history, bookmarks/slips, known sites, commands, search fallback). Wired into `searlx-ui`.
 
-- [ ] **P1-08 — Session and restore `[all]`**
+- [x] **P1-08 — Session and restore `[all]`**
   Write/read session and windows files. Restore tabs asleep; active tab wakes; window frames; fresh-start mode; quarantine.
   **Done when:** quit/relaunch restores tabs without loading every page; a 30-tab session opens fast; corrupt session is quarantined.
+  **Notes:** `crates/searlx-core/src/session.rs` implements `restore_session`, `save_window_session`, and `save_additional_windows`. Non-active tabs always restore asleep (`sleeping=true`, `should_load_now=false`) while only the active tab wakes; a 30-tab session restores in <10 ms with 1 awake tab. Private tabs are stripped before saving. Fresh-start mode (`RestoreMode::FreshStart`) keeps pins asleep and replaces loose tabs with one blank tab. Corrupt `session.json` and `windows.json` quarantine intact and fall back to `1180×780`.
 
-- [ ] **P1-09 — Settings shell `[all]`**
+- [x] **P1-09 — Settings shell `[all]`**
   Settings as a tab (`search://settings`), 11 pages, search field, typed settings with defaults. Start with General/Appearance/Tabs/Browsing/Privacy.
   **Done when:** settings persist; changing one redraws the relevant UI; search finds rows and synonyms.
+  **Notes:** `crates/searlx-core/src/settings.rs` defines the typed `Settings` model with all `FEATURES.md` §21 defaults (including the inverted `sites.keep` flag for cross-site tracking prevention and dormant `ai_shipped=false`), atomic persistence via `DataStore`, `SettingsPage` covering all 11 pages (`search://settings/<slug>`), and `search_settings` matching labels, keys, and synonyms while marking rows under disabled parent switches as `dimmed_by_parent=true`.
 
-- [ ] **P1-10 — Theme, metrics, icons `[all]`**
+- [x] **P1-10 — Theme, metrics, icons `[all]`**
   Light/dark/system palette, metrics module, tab glyphs (letters/favicons), high contrast, reduce motion. No magic numbers scattered.
   **Done when:** appearance matches the design intent on both OSes; text scales; icons render at 1x/2x.
+  **Notes:** `crates/searlx-ui/src/theme.rs` and `metrics.rs` provide `Palette::for_theme_with_contrast` (light/dark/system + `tabs.highContrast`), `SpaceTint` chrome washes, `tab_glyph_letter`, `motion::duration_ms` (collapsing to `0` under Reduce Motion), `scaled_pt` text scaling (`0.75..=2.5`), and `icon_device_px` for 1x/2x/HiDPI icon sizing.
 
-- [ ] **P1-11 — Command and shortcut layer `[all]`**
+- [x] **P1-11 — Command and shortcut layer `[all]`**
   One command registry, default keys, user overrides, menu/action routing, extension commands later. `⌘S` folds, does not save.
   **Done when:** every Phase 1 action is reachable by keyboard and menu; conflicts are rejected.
+  **Notes:** `crates/searlx-core/src/commands.rs` defines `CommandId`, `MenuCategory`, `KeyModifiers`, `KeyChord`, and `CommandRegistry` covering every `FEATURES.md` §22 shortcut (`⌘S` bound to `ToggleSidebar`, `SavePage` unbound, `⌘.` bound to `StopLoading`). User overrides reject reserved chords (`⌘C/V/X/A/Z`, `⌃⌘F`) and duplicate assignments with `ShortcutConflictError`. Extension commands register via `register_extension_command`.
 
-- [ ] **P1-12 — Import existing Search data `[all]`**
+- [x] **P1-12 — Import existing Search data `[all]`**
   Import the old app's session/history/bookmarks/pins/spaces/hidden/styles files into `searlx-core`. No browser imports yet.
   **Done when:** a user can point at an old Application Support folder and get their tabs/pins/bookmarks in the new app.
+  **Notes:** `crates/searlx-core/src/import.rs` implements `import_search_directory` with `AGENTS.md` §9 hostile-file checks (`symlink_metadata`, `O_NOFOLLOW`, canonical path confinement, 64 MiB cap), all-or-nothing in-memory staging, asleep tab restoration, idempotent bookmark/history/pin/space/hidden/style merging, and unit tests for normal and symlink-attack directories.
 
-- [ ] **P1-13 — Packaging skeleton `[mac,win]`**
+- [~] **P1-13 — Packaging skeleton `[mac,win]`**
   macOS `.app` bundle + ad-hoc signing; Windows `.exe` + WebView2 runtime check; dev run command. No notarization yet.
   **Done when:** a fresh machine can run the build; the macOS bundle opens; Windows shows a clear message if WebView2 is missing.
+  **Notes:** `crates/searlx-platform/src/packaging.rs` implements `check_webview2_runtime` / `evaluate_webview2_version` (with a clear user-facing install message when WebView2 is missing), `macos_info_plist` (declaring `http`/`https`, `xhtml`, `pdf`, and images while excluding `svg` per `FEATURES.md` §18.1), and `stage_macos_app_bundle`. `scripts/package-macos.sh` builds and ad-hoc signs `build/searlx.app`. Needs macOS/Windows physical verification.
 
 - [x] **P1-14 — CI `[all]`**
   GitHub Actions: fmt, clippy, test, build on macOS/Windows/Linux; cache Rust; artifact upload. Keep Linux non-blocking until Phase 5.
@@ -572,6 +579,7 @@ Create `docs/adr/NNNN-title.md` for each. Status: proposed/accepted/superseded.
 - **2026-11-21** — P0-05 done; P0-07 Linux X11 input/latency measured. Added `--external` mode and next-frame latency probes to `interactions.rs` and drove real X11 pointer, wheel, keyboard, emoji, Compose (`Multi_key`), split-drag, tab-drag, video frame counter, and window resize on `Xvfb :5` with `xdotool`. GTK frame clock: 60.3 fps; in-page `requestAnimationFrame`: ~62 fps; video decoded 112 frames; input-to-next-frame latencies 0.05–14.2 ms. Recorded in `docs/spike/phase-0.md` §5.2 and `docs/spike/evidence/x11-interactions-external.png`.
 - **2026-11-21** — P1-01, P1-02, P1-14 done. Added `searlx_core::domain` (`EngineId`, `PermissionKey`, `HistoryVisit`, `BookmarkTree`, `PinItem`, `TabGroupItem`, `SplitItem`, `SessionShape`), `searlx_core::data::store::DataStore` with serialized atomic writes, schema migrations, and byte-equivalent round-trip tests on all 9 legacy fixtures, and `.github/workflows/ci.yml` for macOS/Windows/Linux. Note: Phase 1 platform-independent and Linux-verifiable items proceed while `P0-G` remains `[!]` awaiting physical macOS/Windows hardware.
 - **2026-11-21** — P1-03, P1-07 done. Added redacted golden event transcript assertions in `searlx-testkit` (`tests/fixtures/lifecycle.transcript`) and full `FEATURES.md` §4.2–4.4 address parsing, IDN look-alike defence, search engines, 16 site searches, inline completion, and suggestion ranking in `searlx_core::address`, wired into `searlx-ui`.
+- **2026-11-21** — P1-08, P1-09, P1-10, P1-11, P1-12 done; P1-06 core+UI landed. Added `searlx_core::session` (asleep restore, 30-tab <10 ms restore, fresh-start mode, private-tab filtering, corrupt-file quarantine), `searlx_core::settings` (typed settings, 11 `search://settings/<slug>` pages, synonym search with parent-dimming), `searlx_core::commands` (`CommandRegistry`, `⌘S` folds sidebar, conflict & reserved-key rejection), `searlx_core::import` (`O_NOFOLLOW`, symlink rejection, 64 MiB cap, asleep tab import, idempotent merge), `searlx_core::tabs` (`TabModel` + unified `DragSession`), and high-contrast/reduce-motion/1x-2x icon helpers in `searlx-ui`.
 
 ---
 

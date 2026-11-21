@@ -11,12 +11,17 @@ pub mod fake;
 pub mod files;
 pub mod notifications;
 pub mod opener;
+pub mod packaging;
 pub mod power;
 
 pub use credentials::{Credential, CredentialStore};
 pub use files::{FileDialog, FileFilter};
 pub use notifications::Notifier;
 pub use opener::Opener;
+pub use packaging::{
+    ALLOWED_DOCUMENT_EXTENSIONS, WEBVIEW2_CLIENT_GUID, WEBVIEW2_MISSING_MESSAGE, WebView2Status,
+    check_webview2_runtime, evaluate_webview2_version, macos_info_plist, stage_macos_app_bundle,
+};
 pub use power::{PowerAssertion, PowerManager};
 
 /// A service this platform cannot provide.

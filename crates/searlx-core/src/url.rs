@@ -132,7 +132,17 @@ impl PageUrl {
     #[must_use]
     pub fn display(&self) -> String {
         match self.0.scheme() {
-            "search" => format!("search://{}", self.0.path().trim_start_matches('/')),
+            "search" => {
+                let host = self.0.host_str().unwrap_or_default();
+                let path = self.0.path().trim_start_matches('/');
+                if host.is_empty() {
+                    format!("search://{path}")
+                } else if path.is_empty() {
+                    format!("search://{host}")
+                } else {
+                    format!("search://{host}/{path}")
+                }
+            }
             "file" => self
                 .0
                 .path_segments()
@@ -257,24 +267,36 @@ impl From<PageUrl> for String {
     }
 }
 
-/// Internal pages are the only `search://` routes a page may load.
+/// Internal pages are the only `search://` routes a page may load (`FEATURES.md` §26).
+///
+/// `search://settings/<section>` and `search://import/<source>` carry a detail
+/// path segment; other internal pages take no path segment.
 pub(crate) fn is_known_internal_route(url: &Url) -> bool {
-    let route = if url.path().trim_start_matches('/').is_empty() {
-        url.host_str().unwrap_or_default()
+    let host = url.host_str().unwrap_or_default();
+    let path = url.path().trim_matches('/');
+    let (page, detail) = if host.is_empty() {
+        match path.split_once('/') {
+            Some((first, rest)) => (first, Some(rest)),
+            None => (path, None),
+        }
     } else {
-        url.path().trim_start_matches('/')
+        (host, (!path.is_empty()).then_some(path))
     };
-    matches!(
-        route,
-        "" | "settings"
-            | "history"
-            | "downloads"
-            | "bookmarks"
-            | "passwords"
-            | "archive"
-            | "import"
-            | "release-notes"
-    )
+    match (page, detail) {
+        (
+            "" | "newtab" | "settings" | "history" | "downloads" | "bookmarks" | "passwords"
+            | "archive" | "import" | "release-notes",
+            None,
+        ) => true,
+        ("settings", Some(section)) => crate::settings::SettingsPage::from_slug(section).is_some(),
+        ("import", Some(source)) => {
+            !source.is_empty()
+                && source
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]
