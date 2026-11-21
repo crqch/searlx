@@ -88,9 +88,10 @@ Current focus (status lives in Phase 0 below; this is only the order):
   Build the five interactions that decide the architecture: (1) overlay menu above a page; (2) tab drag with a floating lift panel; (3) split-view divider resize; (4) IME/emoji in a page and in the field; (5) video fullscreen/PiP/floating.
   **Done when:** each interaction works or has a measured fallback; latency numbers are recorded per OS.
 
-- [ ] **P0-08 — Performance baseline `[all]`**
+- [~] **P0-08 — Performance baseline `[all]`**
   Measure cold open, new tab, tab switch, split resize, scroll, and memory with 1/10/30 tabs. Use the same page and hardware per OS. Record in `docs/spike/phase-0.md`.
   **Done when:** numbers are comparable to the Swift app and any regressions have a cause.
+  **Notes:** `crates/searlx-engine-linux/src/bin/bench.rs` measures 1/10/30 tabs on X11 with a deterministic local page. Results are in `docs/spike/phase-0.md` §5.1. Headline: 1 tab = 400 MiB / 3 processes, 10 = 1.98 GiB / 12, 30 = 5.44 GiB / 35 (6.13 GiB after switching). WebKitGTK creates one WebKitWebProcess per view (~178–209 MiB each); 30 live tabs are unacceptable and sleeping is mandatory. Tab switch averages 0.20/0.93/2.82 ms. The benchmark does not include macOS/Windows or a Swift-app comparison, so this is a Linux baseline, not a completed all-platform comparison.
 
 - [x] **P0-09 — Spike report `[all]`**
   Write `docs/spike/phase-0.md`: what worked, what did not, per-OS capability table, recommended Linux engine, recommended extension strategy, risks, and a go/no-go for Phase 1.
@@ -560,6 +561,7 @@ Create `docs/adr/NNNN-title.md` for each. Status: proposed/accepted/superseded.
 - **2026-11-21** — P0-01/P0-02 underway. Rust workspace, eight crates, gpui shell, engine contract, fake engine, platform traits/fakes, testkit contract test, toolchain/CI/docs skeleton. `cargo check`, `fmt`, `clippy -D warnings`, and `cargo test --workspace` pass on Linux; the binary launches. Committed directly to `main` as requested; no remote push.
 - **2026-11-21** — P0-11 done. `searlx-core::data` models and nine inferred fixtures; unknown fields survive, corrupt files quarantine without overwriting, `write_json` is atomic. 17 core tests pass.
 - **2026-11-21** — P0-06/P0-09/P0-10/P0-12 done; P0-05 partial. Linux WebKitGTK spike ran on X11/Xwayland and native Wayland: real page, JS scroll, overlay visible (X11), focus on X11, WebKit child processes, page snapshots; Wayland focus/readback failed in the locked session. gpui 0.2.2 cannot host a Linux native view, so ADR-0002 recommends a GTK-native shell (X11/XWayland first). Wrote `docs/spike/phase-0.md`, `capabilities.md`, `security-checklist.md`, ADR-0001..0008, and copied evidence PNGs. P0-G is blocked on macOS/Windows hardware and real Linux input/frame-rate checks. `cargo fmt`, `clippy -D warnings`, and `cargo test --workspace` pass; 17 tests.
+- **2026-11-21** — P0-08 baseline measured on X11. 1/10/30 local tabs: RSS 400 MiB / 1.98 GiB / 5.44 GiB, processes 3/12/35, switch avg 0.20/0.93/2.82 ms. WebKitGTK uses one WebKitWebProcess per view (~178–209 MiB), so 30 live tabs cost ~6 GiB and sleeping is mandatory. Recorded in `docs/spike/phase-0.md` §5.1; macOS/Windows comparison still open. Next: P0-07 hard interactions on the GTK shell.
 
 ---
 

@@ -21,5 +21,9 @@ webkit2gtk = { version = "3.0", features = ["v2_40"] }
 name = "searlx-spike-linux"
 path = "src/bin/spike.rs"
 
+[[bin]]
+name = "searlx-bench-linux"
+path = "src/bin/bench.rs"
+
 [lints]
 workspace = true

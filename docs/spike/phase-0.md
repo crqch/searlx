@@ -95,6 +95,50 @@ The load time is **not** cold start. It is the interval from the engine's
 `Started` signal to `Finished`; process spawn and GTK startup are outside it.
 One page, one run, no statistical treatment.
 
+### 5.1 Tab benchmark (P0-08)
+
+`crates/searlx-engine-linux/src/bin/bench.rs` creates N WebKitGTK views in a
+`GtkNotebook`, loads the same deterministic local page in every tab, switches
+pages for a fixed number of cycles, and sums `VmRSS` for the app plus every
+descendant process. One process per tab count; X11; `example.com` is not
+involved, so network variance is removed.
+
+| Tabs | Create tabs | Window ready | All loads finished | Per-tab load avg (min–max) | RSS after load | Processes | Switch avg | Switch max | RSS after switching |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 79 ms | 100 ms | 103 ms | 103 ms | 400 MiB | 3 | 0.20 ms | 4.0 ms | 414 MiB |
+| 10 | 87 ms | 110 ms | 188 ms | 175 ms (161–188) | 1.98 GiB | 12 | 0.93 ms | 8.0 ms | 2.20 GiB |
+| 30 | 77 ms | 101 ms | 549 ms | 463 ms (362–549) | 5.44 GiB | 35 | 2.82 ms | 27.4 ms | 6.13 GiB |
+
+RSS is `VmRSS` in KiB, converted here to MiB/GiB. It counts shared pages once
+per process, so it overstates unique physical memory. The shape is the point.
+
+Observations:
+
+- WebKitGTK creates **one `WebKitWebProcess` per view** in this configuration:
+  1 tab → 1 web process; 10 tabs → 10; 30 tabs → 30. Each web process is roughly
+  178–209 MiB; the network process is ~65 MiB; the GTK app is ~165–180 MiB.
+- Load time grows sub-linearly with concurrent tabs (103 ms → 549 ms for 30).
+  The default page is small and local; a real site is heavier.
+- Page switching is cheap at 1 tab and grows to 2.8 ms average at 30. The max
+  (27 ms) is a missed frame at 60 Hz, so a 30-tab switch is not guaranteed
+  smooth. This measures main-thread event drain, not presented frames.
+- **30 live tabs cost ~6 GiB.** Sleeping tabs is not a nice-to-have; it is a
+  Tier A requirement. A 30-tab session must park most views and keep a
+  serialisable snapshot, or memory will be unacceptable on 8/16 GiB machines.
+- The benchmark does not compare against the Swift app (not present). It is a
+  Linux baseline, not a regression verdict. P0-08 stays in progress until the
+  same page and tab counts are measured on macOS and Windows.
+
+Reproduce:
+
+```sh
+cargo build -p searlx-engine-linux --bin searlx-bench-linux
+for n in 1 10 30; do
+  GDK_BACKEND=x11 DISPLAY=:0 XDG_RUNTIME_DIR=/tmp/run-1000 \
+    ./target/debug/searlx-bench-linux --tabs "$n" --cycles 10 --seconds 60
+done
+```
+
 ### Evidence
 
 - [X11 page snapshot](evidence/x11-page.png)
