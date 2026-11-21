@@ -1,8 +1,11 @@
 //! The searlx composition root.
 //!
 //! This is the only crate that wires concrete platform and engine
-//! implementations together. Phase 0 ships the gpui shell on the fake engine;
-//! native backends land behind it as they pass their contract tests.
+//! implementations together.
+//! - On Linux (`ADR-0002`, `P5-01`), launches the GTK-native + WebKitGTK browser
+//!   shell by default (or the Phase 0 `gpui` shell when `--gpui-shell` is passed).
+//! - With `--probe` or `SEARCH_PROBE`, runs the headless isolated test-world probe
+//!   and exits immediately.
 
 use anyhow::{Context, Result};
 use searlx_core::ai_agents_bench::BenchWorldConfig;
@@ -42,8 +45,24 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    tracing::info!(target: "search", platform = searlx_platform::platform_name(), "starting");
+    let use_gpui_shell = args.iter().any(|a| a == "--gpui-shell");
+    let initial_urls: Vec<String> = args.into_iter().filter(|a| !a.starts_with('-')).collect();
 
+    tracing::info!(
+        target: "search",
+        platform = searlx_platform::platform_name(),
+        "starting"
+    );
+
+    #[cfg(target_os = "linux")]
+    if !use_gpui_shell {
+        searlx_engine_linux::browser::run_gtk_browser(&initial_urls)
+            .map_err(|e| anyhow::anyhow!(e))
+            .context("the Linux WebKitGTK browser failed to start")?;
+        return Ok(());
+    }
+
+    let _ = (use_gpui_shell, initial_urls);
     searlx_ui::run().context("the UI failed to start")?;
     Ok(())
 }

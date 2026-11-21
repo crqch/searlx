@@ -15,5 +15,8 @@ searlx-engine.workspace = true
 searlx-platform.workspace = true
 searlx-ui.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+searlx-engine-linux = { path = "../../crates/searlx-engine-linux" }
+
 [lints]
 workspace = true

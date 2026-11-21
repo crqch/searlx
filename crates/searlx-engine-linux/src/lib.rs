@@ -9,6 +9,9 @@
 //!   `site_isolation`) are explicitly reported as `false` so the UI hides them
 //!   rather than silently doing nothing (`AGENTS.md` §2.4, §3.2).
 
+#[cfg(target_os = "linux")]
+pub mod browser;
+
 use searlx_core::{PageUrl, ProfileId, SpaceId, TabId};
 use searlx_engine::{
     Capabilities, DataKinds, DataStoreHandle, Engine, EngineEvent, EngineResult, FakeEngine,

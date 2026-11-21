@@ -4974,6 +4974,7 @@ dependencies = [
  "anyhow",
  "searlx-core",
  "searlx-engine",
+ "searlx-engine-linux",
  "searlx-platform",
  "searlx-ui",
  "tracing",
@@ -5010,6 +5011,7 @@ name = "searlx-engine-linux"
 version = "0.0.0"
 dependencies = [
  "cairo-rs",
+ "gio",
  "glib",
  "gtk",
  "searlx-core",
