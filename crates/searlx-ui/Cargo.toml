@@ -1,0 +1,19 @@
+[package]
+name = "searlx-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "gpui chrome: window, tabs, sidebar, split, panels for searlx."
+
+[dependencies]
+gpui = "0.2.2"
+thiserror.workspace = true
+serde.workspace = true
+searlx-core.workspace = true
+searlx-engine.workspace = true
+tracing.workspace = true
+unicode-segmentation = "1.12"
+
+[lints]
+workspace = true

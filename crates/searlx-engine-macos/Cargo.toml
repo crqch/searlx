@@ -1,0 +1,15 @@
+[package]
+name = "searlx-engine-macos"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "WKWebView engine backend for searlx (macOS)."
+
+[dependencies]
+searlx-core.workspace = true
+searlx-engine.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -27,7 +27,7 @@ Platform tags: `[all]`, `[mac]`, `[win]`, `[linux]`, `[mac,win]`, `[mac,linux]`.
 
 | Phase | Done | Total | Status |
 |---|---:|---:|---|
-| 0 — Feasibility spike | 0 | 13 | Not started |
+| 0 — Feasibility spike | 0 | 13 | In progress |
 | 1 — Foundation | 0 | 16 | Not started |
 | 2 — Daily driver | 0 | 23 | Not started |
 | 3 — Identity and power | 0 | 20 | Not started |
@@ -57,13 +57,15 @@ Current focus (status lives in Phase 0 below; this is only the order):
 
 **Timebox:** 2–4 weeks. **Goal:** prove the hard interactions, not build a browser. Write everything down in `docs/spike/phase-0.md`.
 
-- [ ] **P0-01 — Scaffold the Rust workspace `[all]`**
+- [~] **P0-01 — Scaffold the Rust workspace `[all]`**
   Create the workspace from AGENTS.md §3: `searlx-core`, `searlx-engine`, `searlx-ui`, `searlx-platform`, `searlx-testkit`, `apps/searlx`, `docs/adr`, `docs/spike`. Add `rust-toolchain.toml`, `rustfmt.toml`, `.gitignore`, CI skeleton.
   **Done when:** `cargo check --workspace` passes; `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings` pass; an empty gpui app launches.
+  **Notes:** Workspace, all eight crates, toolchain pin, fmt config and the gpui shell exist. `cargo check`, `fmt --check`, `clippy -D warnings` and `cargo test --workspace` pass on Linux. `target/debug/searlx` stays up with the shell. The vendored `xattr` patch is needed because current `libc` dropped the Linux `ENOATTR` alias used by gpui's HTTP client; see `vendor/xattr/README.searlx.md`. CI workflow is written but has not run on GitHub yet. macOS/Windows launch still needs a machine.
 
-- [ ] **P0-02 — gpui window shell `[all]`**
+- [~] **P0-02 — gpui window shell `[all]`**
   One window, hidden title bar, 1180×780 default, 640×420 minimum, a row of 2 fake tabs, an address field, and a page placeholder. No real engine yet.
   **Done when:** it opens on macOS, Windows, and Linux (X11); tab click switches; field takes IME/emoji; reduce-motion and light/dark are respected.
+  **Notes:** The shell is in `crates/searlx-ui` (`app.rs`, `field.rs`, `theme.rs`, `metrics.rs`): 1180×780, 640×420 minimum, two fake tabs, close/new-tab, one address entity with grapheme-aware editing, selection, clipboard and marked-text (IME composition) support, light/dark palette from the window appearance, and an overlay chip over the page placeholder. Linux launch verified; manual IME/emoji and macOS/Windows checks are still open. There are no animations yet, so Reduce Motion is respected trivially; motion constants are in `metrics.rs` for when they arrive.
 
 - [ ] **P0-03 — macOS WKWebView embed `[mac]`**
   Embed a real `WKWebView` as a native child of the gpui window via `objc2`/`objc2-web-kit`. Load two tabs; keep each page alive across switching. Place a gpui overlay above the page.
@@ -549,6 +551,7 @@ _None yet._
 ## Progress log
 
 - **2026-11-20** — Created `AGENTS.md` and `TODO.md`. Phase 0 not started. The original Swift checkout is no longer present in this working tree; `FEATURES.md` is the behavioural source of truth.
+- **2026-11-21** — P0-01/P0-02 underway. Rust workspace, eight crates, gpui shell, engine contract, fake engine, platform traits/fakes, testkit contract test, toolchain/CI/docs skeleton. `cargo check`, `fmt`, `clippy -D warnings`, and `cargo test --workspace` pass on Linux; the binary launches. Committed directly to `main` as requested; no remote push.
 
 ---
 

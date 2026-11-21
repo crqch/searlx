@@ -1,0 +1,15 @@
+[package]
+name = "searlx-engine-linux"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "WebKitGTK engine backend for searlx (experimental)."
+
+[dependencies]
+searlx-core.workspace = true
+searlx-engine.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

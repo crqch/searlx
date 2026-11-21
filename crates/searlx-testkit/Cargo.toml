@@ -1,0 +1,18 @@
+[package]
+name = "searlx-testkit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Headless harness and contract tests for searlx engines."
+
+[dependencies]
+thiserror.workspace = true
+searlx-core.workspace = true
+searlx-engine.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

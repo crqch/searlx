@@ -1,0 +1,18 @@
+[package]
+name = "searlx-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Engine contract, events, capabilities, and a fake engine for searlx."
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+url.workspace = true
+uuid.workspace = true
+tracing.workspace = true
+searlx-core.workspace = true
+
+[lints]
+workspace = true

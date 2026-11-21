@@ -1,0 +1,19 @@
+[package]
+name = "searlx"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Composition root for the searlx browser."
+
+[dependencies]
+anyhow = "1.0"
+tracing.workspace = true
+tracing-subscriber.workspace = true
+searlx-core.workspace = true
+searlx-engine.workspace = true
+searlx-platform.workspace = true
+searlx-ui.workspace = true
+
+[lints]
+workspace = true

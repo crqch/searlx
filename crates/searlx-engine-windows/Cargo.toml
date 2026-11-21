@@ -1,0 +1,15 @@
+[package]
+name = "searlx-engine-windows"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "WebView2 engine backend for searlx (Windows)."
+
+[dependencies]
+searlx-core.workspace = true
+searlx-engine.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
