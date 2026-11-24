@@ -315,7 +315,7 @@ pub enum SwitcherHeldAction {
 }
 
 /// State machine for the `⌃Tab` recent-tab switcher (`FEATURES.md` §3.4, P3-08).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TabSwitcherState {
     /// Ordered tab cards (current tab first, then MRU up to 10 cards).
     pub cards: Vec<TabId>,

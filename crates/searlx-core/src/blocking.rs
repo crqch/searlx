@@ -82,6 +82,19 @@ pub fn normalize_site_key(host: &str) -> String {
 }
 
 /// Compile Search's content-blocker rules into WebKit `WKContentRuleList` JSON
+/// format (`FEATURES.md` §12.1, P2-07), returning `"[]"` when Shield is globally off.
+#[must_use]
+pub fn compile_webkit_content_rules_with_shield(
+    shield_enabled: bool,
+    paused_sites: &[String],
+) -> String {
+    if !shield_enabled {
+        return "[]".into();
+    }
+    compile_webkit_content_rules(paused_sites)
+}
+
+/// Compile Search's content-blocker rules into WebKit `WKContentRuleList` JSON
 /// format (`FEATURES.md` §12.1, P2-07).
 #[must_use]
 pub fn compile_webkit_content_rules(paused_sites: &[String]) -> String {
@@ -456,18 +469,38 @@ impl HideElementsManager {
 
     /// Generate the before-first-paint stylesheet for `site_host`, where every
     /// selector is emitted as its own `selector { display:none !important }` rule (`FEATURES.md` §5.5).
+    /// Selectors containing CSS block/tag breakout tokens (`<`, `>`, `{`, `}`) are skipped.
     #[must_use]
     pub fn before_first_paint_css(&self, site_host: &str, private: bool) -> Option<String> {
         let selectors = self.selectors_for_site(site_host, private);
-        if selectors.is_empty() {
+        let safe_selectors: Vec<String> = selectors
+            .into_iter()
+            .filter(|sel| {
+                let trimmed = sel.trim();
+                !trimmed.is_empty()
+                    && !trimmed.contains('{')
+                    && !trimmed.contains('}')
+                    && !trimmed.contains('<')
+                    && !trimmed.contains('\n')
+                    && !trimmed.contains('\r')
+            })
+            .collect();
+        if safe_selectors.is_empty() {
             return None;
         }
         let mut css = String::new();
-        for sel in selectors {
+        for sel in safe_selectors {
             css.push_str(&sel);
             css.push_str(" { display:none !important }\n");
         }
         Some(css)
+    }
+
+    /// Clear all in-memory private-tab rules and private undo entries when the
+    /// last private tab closes (`AGENTS.md` §9, `FEATURES.md` §5.5).
+    pub fn clear_private_memory(&mut self) {
+        self.private_memory.clear();
+        self.undo_stack.retain(|(_, _, is_private)| !*is_private);
     }
 }
 
@@ -566,6 +599,29 @@ impl SiteCssManager {
             .get(&site)
             .filter(|s| s.enabled && !s.css.is_empty())
             .map(|s| s.css.as_str())
+    }
+
+    /// Whether `sites.styles` is currently enabled.
+    #[must_use]
+    pub const fn is_feature_enabled(&self) -> bool {
+        self.feature_enabled
+    }
+
+    /// JavaScript snippet that creates or updates `<style id="office-style">`
+    /// appended last so equal-specificity user rules win (`FEATURES.md` §5.6).
+    #[must_use]
+    pub fn injection_script(&self, site_host: &str) -> Option<String> {
+        let css = self.active_css_for_site(site_host)?;
+        let json_css = serde_json::to_string(css).ok()?;
+        Some(format!(
+            "(() => {{\
+             let el = document.getElementById('office-style');\
+             if (!el) {{ el = document.createElement('style'); el.id = 'office-style'; }}\
+             el.textContent = {json_css};\
+             const parent = document.head || document.documentElement;\
+             if (parent) parent.appendChild(el);\
+             }})();"
+        ))
     }
 }
 

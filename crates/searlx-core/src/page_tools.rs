@@ -130,6 +130,38 @@ impl DuskController {
         &self.durable_sites
     }
 
+    /// Mutable access to persisted site preferences (`dusk.sites`) for hydration from settings.
+    pub const fn durable_sites_mut(&mut self) -> &mut BTreeMap<String, bool> {
+        &mut self.durable_sites
+    }
+
+    /// Look up the explicit per-site Dusk override, checking private-tab memory first when private.
+    #[must_use]
+    pub fn is_site_explicit(&self, site_host: &str, private: bool) -> Option<bool> {
+        let site = normalize_site_key(site_host);
+        if private && let Some(choice) = self.private_sites.get(&site) {
+            return Some(*choice);
+        }
+        self.durable_sites.get(&site).copied()
+    }
+
+    /// Clear in-memory private-tab Dusk overrides once the last private tab closes.
+    pub fn clear_private_memory(&mut self) {
+        self.private_sites.clear();
+    }
+
+    /// Build a script that installs, updates, or removes the Dusk `<style id="searlx-dusk-style">` tag.
+    #[must_use]
+    pub fn style_injection_script(css: &str) -> String {
+        if css.trim().is_empty() {
+            return "(function(){var el=document.getElementById('searlx-dusk-style');if(el){el.remove();}})();".to_string();
+        }
+        let encoded = serde_json::to_string(css).unwrap_or_else(|_| "\"\"".to_string());
+        format!(
+            "(function(){{var id='searlx-dusk-style';var el=document.getElementById(id);if(!el){{el=document.createElement('style');el.id=id;(document.head||document.documentElement).appendChild(el);}}el.textContent={encoded};}})();"
+        )
+    }
+
     /// Evaluate Dusk for a page given frame darkness, measured RGB sample,
     /// fullscreen state, stylesheets, and budget (`FEATURES.md` §5.7).
     #[allow(clippy::too_many_arguments)]
@@ -610,5 +642,21 @@ mod tests {
             Some("article · 720×480")
         );
         assert!(!elem.clipboard_transient);
+    }
+
+    #[test]
+    fn dusk_private_memory_clear_and_style_script() {
+        let mut dusk = DuskController::new(true);
+        assert!(dusk.toggle_site("example.com", false, true));
+        assert_eq!(dusk.is_site_explicit("example.com", true), Some(true));
+        assert!(dusk.durable_site_preferences().is_empty());
+        dusk.clear_private_memory();
+        assert_eq!(dusk.is_site_explicit("example.com", true), None);
+
+        let install = DuskController::style_injection_script("html { color-scheme: dark; }");
+        assert!(install.contains("searlx-dusk-style"));
+        assert!(install.contains("color-scheme: dark"));
+        let remove = DuskController::style_injection_script("");
+        assert!(remove.contains("el.remove()"));
     }
 }

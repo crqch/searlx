@@ -369,6 +369,15 @@ impl DownloadsManager {
         self.entries.iter().filter(|e| !e.private).collect()
     }
 
+    /// Count of currently active (in-progress or paused) downloads, including private tabs.
+    #[must_use]
+    pub fn active_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|e| matches!(e.state, DownloadState::InProgress | DownloadState::Paused))
+            .count()
+    }
+
     /// Aggregate progress `(received_bytes, total_bytes)` across all active
     /// downloads, **including** private downloads (`FEATURES.md` §11: "it still
     /// counts for the global progress ring").

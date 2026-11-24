@@ -27,6 +27,7 @@ use url::Url;
 use crate::domain::{BookmarkItem, BookmarkTree, HistoryVisit};
 use crate::error::{CoreError, Result};
 use crate::ids::TabId;
+use crate::menus_and_pages::InternalPageKind;
 use crate::url::PageUrl;
 
 /// Built-in search engines (`FEATURES.md` §4.4).
@@ -901,6 +902,30 @@ pub struct OpenTabCandidate {
     pub url: PageUrl,
 }
 
+/// A past search submitted through a site-search chip (`FEATURES.md` §4.3).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PastSiteSearchRecord {
+    /// Site display name (e.g. `"YouTube"`).
+    pub site_name: String,
+    /// Normalized host.
+    pub host: String,
+    /// Query text submitted on that site.
+    pub query: String,
+    /// Resulting URL.
+    pub url: PageUrl,
+}
+
+/// An open tab synced from another Apple device via iCloud (`FEATURES.md` §4.3, §14).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ICloudTabCandidate {
+    /// Device name (`"Alice's MacBook Pro"`).
+    pub device_name: String,
+    /// Page title.
+    pub title: String,
+    /// Page URL.
+    pub url: PageUrl,
+}
+
 /// A row in the suggestion list under the address field (`FEATURES.md` §4.3).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SuggestionRow {
@@ -918,6 +943,17 @@ pub enum SuggestionRow {
         /// Matching site search definition.
         site: SiteSearch,
     },
+    /// A past search performed on a site-search host (`FEATURES.md` §4.3).
+    PastSiteSearch {
+        /// Site name.
+        site_name: String,
+        /// Site host.
+        host: String,
+        /// Previously searched query.
+        query: String,
+        /// Resulting search URL.
+        url: PageUrl,
+    },
     /// A visited history entry scored by frecency and prefix/substring fit.
     History {
         /// Page title.
@@ -934,11 +970,36 @@ pub enum SuggestionRow {
         /// Bookmark URL (`None` for a folder slip).
         url: Option<PageUrl>,
     },
+    /// An open tab from another iCloud device (up to 2 when typing `>= 2` chars).
+    ICloudTab {
+        /// Source device name.
+        device_name: String,
+        /// Remote tab title.
+        title: String,
+        /// Remote tab URL.
+        url: PageUrl,
+    },
     /// A built-in known site (`FEATURES.md` §4.3).
     KnownSite {
         /// Site name.
         title: String,
         /// Site URL.
+        url: PageUrl,
+    },
+    /// A live query suggestion from the configured search engine (`search.suggest`, non-private only).
+    EngineSuggestion {
+        /// Suggested query text (`<= 80` chars).
+        query: String,
+        /// Expanded search URL.
+        url: PageUrl,
+    },
+    /// An internal page or Settings sub-page route (`FEATURES.md` §4.3, §26).
+    InternalPage {
+        /// Target internal page kind.
+        kind: InternalPageKind,
+        /// Display label (e.g. `"Settings › Privacy"` or `"Archived Tabs"`).
+        label: String,
+        /// Target `search://` URL.
         url: PageUrl,
     },
     /// An internal page or command (`FEATURES.md` §4.3).
@@ -973,6 +1034,48 @@ pub struct SuggestionContext<'a> {
     pub commands_enabled: bool,
 }
 
+/// Optional extra sources for [`build_suggestions_full`] (`FEATURES.md` §4.3).
+#[derive(Clone, Debug, Default)]
+pub struct SuggestionExtras<'a> {
+    /// Whether the active tab is a private tab (disables engine suggest & iCloud writes).
+    pub private_tab: bool,
+    /// Whether `search.suggest` is enabled in Settings.
+    pub search_suggest_enabled: bool,
+    /// Live search engine suggestions returned asynchronously for the current query.
+    pub engine_suggestions: &'a [String],
+    /// Past queries recorded for site searches.
+    pub past_site_searches: &'a [PastSiteSearchRecord],
+    /// Synced iCloud tabs from other devices.
+    pub icloud_tabs: &'a [ICloudTabCandidate],
+}
+
+/// Whether the browser may issue a remote search-suggestion request for `typed`
+/// (`FEATURES.md` §4.3: never in private tabs, only when `search.suggest` is enabled,
+/// never for blank inputs or explicit URLs/file paths).
+#[must_use]
+pub fn should_query_search_suggestions(
+    typed: &str,
+    search_suggest_enabled: bool,
+    private_tab: bool,
+) -> bool {
+    if !search_suggest_enabled || private_tab {
+        return false;
+    }
+    let trimmed = typed.trim();
+    if trimmed.chars().count() < 2 {
+        return false;
+    }
+    if trimmed.starts_with('/')
+        || trimmed.starts_with("~/")
+        || trimmed == "~"
+        || has_explicit_scheme(trimmed).is_some()
+        || trimmed.contains('@')
+    {
+        return false;
+    }
+    true
+}
+
 /// Compute the grey inline completion suffix for `typed` (`FEATURES.md` §4.3).
 ///
 /// Remember: `Return` accepts the grey completion; `Tab` walks suggestions or
@@ -984,35 +1087,70 @@ pub fn inline_completion(typed: &str, ctx: &SuggestionContext<'_>) -> Option<Str
         return None;
     }
     let lower = needle.to_ascii_lowercase();
+    let wants_path = lower.contains('/');
 
-    // 1. Check history hosts by visit count (highest visit count first).
+    // 1. Check history hosts (or host+path when `/` is typed) by visit count.
     let mut best_history: Option<(u32, String)> = None;
     for visit in ctx.history {
-        if let Some(host) = visit.url.host() {
-            let clean = host.trim_start_matches("www.");
-            if clean.starts_with(&lower) && clean.len() > lower.len() {
-                let candidate_suffix = clean[lower.len()..].to_owned();
-                if best_history
-                    .as_ref()
-                    .is_none_or(|(score, _)| visit.visit_count > *score)
-                {
-                    best_history = Some((visit.visit_count, candidate_suffix));
-                }
-            }
+        if let Some(suffix) = match_url_inline_suffix(&visit.url, &lower, wants_path)
+            && best_history
+                .as_ref()
+                .is_none_or(|(score, _)| visit.visit_count > *score)
+        {
+            best_history = Some((visit.visit_count, suffix));
         }
     }
     if let Some((_, suffix)) = best_history {
         return Some(suffix);
     }
 
-    // 2. Check built-in known sites.
+    // 2. Check saved bookmarks.
+    if let Some(suffix) = inline_from_bookmarks(&ctx.bookmarks.roots, &lower, wants_path) {
+        return Some(suffix);
+    }
+
+    // 3. Check built-in known sites.
     for (_, raw_url) in BUILTIN_KNOWN_SITES {
         if let Ok(url) = PageUrl::parse(raw_url)
-            && let Some(host) = url.host()
+            && let Some(suffix) = match_url_inline_suffix(&url, &lower, wants_path)
         {
-            let clean = host.trim_start_matches("www.");
-            if clean.starts_with(&lower) && clean.len() > lower.len() {
-                return Some(clean[lower.len()..].to_owned());
+            return Some(suffix);
+        }
+    }
+    None
+}
+
+fn match_url_inline_suffix(url: &PageUrl, lower_needle: &str, wants_path: bool) -> Option<String> {
+    let host = url.host()?;
+    let clean_host = host.trim_start_matches("www.").to_ascii_lowercase();
+    if wants_path {
+        let path = url.as_url().path().to_ascii_lowercase();
+        let full = format!("{clean_host}{path}");
+        if full.starts_with(lower_needle) && full.len() > lower_needle.len() {
+            return Some(full[lower_needle.len()..].to_owned());
+        }
+    } else if clean_host.starts_with(lower_needle) && clean_host.len() > lower_needle.len() {
+        return Some(clean_host[lower_needle.len()..].to_owned());
+    }
+    None
+}
+
+fn inline_from_bookmarks(
+    items: &[BookmarkItem],
+    lower_needle: &str,
+    wants_path: bool,
+) -> Option<String> {
+    for item in items {
+        match item {
+            BookmarkItem::Link { url, .. } => {
+                if let Some(suffix) = match_url_inline_suffix(url, lower_needle, wants_path) {
+                    return Some(suffix);
+                }
+            }
+            BookmarkItem::Folder { children, .. } => {
+                if let Some(suffix) = inline_from_bookmarks(children, lower_needle, wants_path) {
+                    return Some(suffix);
+                }
             }
         }
     }
@@ -1021,8 +1159,19 @@ pub fn inline_completion(typed: &str, ctx: &SuggestionContext<'_>) -> Option<Str
 
 /// Build the ordered suggestion list under the address field (`FEATURES.md` §4.3).
 #[must_use]
-#[allow(clippy::too_many_lines)]
 pub fn build_suggestions(typed: &str, ctx: &SuggestionContext<'_>) -> Vec<SuggestionRow> {
+    build_suggestions_full(typed, ctx, &SuggestionExtras::default())
+}
+
+/// Build the complete suggestion list including site searches, iCloud tabs,
+/// optional search-engine suggestions, and internal page routes (`FEATURES.md` §4.3).
+#[must_use]
+#[allow(clippy::too_many_lines)]
+pub fn build_suggestions_full(
+    typed: &str,
+    ctx: &SuggestionContext<'_>,
+    extras: &SuggestionExtras<'_>,
+) -> Vec<SuggestionRow> {
     let needle = typed.trim();
     if needle.is_empty() {
         return Vec::new();
@@ -1051,6 +1200,26 @@ pub fn build_suggestions(typed: &str, ctx: &SuggestionContext<'_>) -> Vec<Sugges
             });
             open_count += 1;
             if open_count >= 6 {
+                break;
+            }
+        }
+    }
+
+    // 2b. Past site searches (up to 3 matching site name, host, or query).
+    let mut past_count = 0_usize;
+    for entry in extras.past_site_searches {
+        if entry.query.to_ascii_lowercase().contains(&lower)
+            || entry.site_name.to_ascii_lowercase().contains(&lower)
+            || entry.host.to_ascii_lowercase().contains(&lower)
+        {
+            rows.push(SuggestionRow::PastSiteSearch {
+                site_name: entry.site_name.clone(),
+                host: entry.host.clone(),
+                query: entry.query.clone(),
+                url: entry.url.clone(),
+            });
+            past_count += 1;
+            if past_count >= 3 {
                 break;
             }
         }
@@ -1088,6 +1257,26 @@ pub fn build_suggestions(typed: &str, ctx: &SuggestionContext<'_>) -> Vec<Sugges
     // 4. Bookmarks, including folders ("slips").
     collect_bookmark_suggestions(&ctx.bookmarks.roots, &lower, &mut rows, 6);
 
+    // 4b. Open tabs from other iCloud devices (up to 2 when typing >= 2 chars).
+    if needle.chars().count() >= 2 {
+        let mut icloud_count = 0_usize;
+        for remote in extras.icloud_tabs {
+            if remote.title.to_ascii_lowercase().contains(&lower)
+                || remote.url.display().to_ascii_lowercase().contains(&lower)
+            {
+                rows.push(SuggestionRow::ICloudTab {
+                    device_name: remote.device_name.clone(),
+                    title: remote.title.clone(),
+                    url: remote.url.clone(),
+                });
+                icloud_count += 1;
+                if icloud_count >= 2 {
+                    break;
+                }
+            }
+        }
+    }
+
     // 5. Built-in known sites (up to 4 not already covered by history/bookmarks).
     let mut known_added = 0_usize;
     for (name, raw_url) in BUILTIN_KNOWN_SITES {
@@ -1113,7 +1302,31 @@ pub fn build_suggestions(typed: &str, ctx: &SuggestionContext<'_>) -> Vec<Sugges
         }
     }
 
-    // 6. Internal pages / commands.
+    // 5b. Live search-engine suggestions (`search.suggest`, never in private tabs, up to 6, <=80 chars).
+    if should_query_search_suggestions(needle, extras.search_suggest_enabled, extras.private_tab) {
+        let mut suggest_added = 0_usize;
+        for raw_suggest in extras.engine_suggestions {
+            let trimmed = raw_suggest.trim();
+            if trimmed.is_empty()
+                || trimmed.chars().count() > 80
+                || trimmed.eq_ignore_ascii_case(needle)
+            {
+                continue;
+            }
+            if let Ok(url) = ctx.engine.search_url(trimmed) {
+                rows.push(SuggestionRow::EngineSuggestion {
+                    query: trimmed.to_owned(),
+                    url,
+                });
+                suggest_added += 1;
+                if suggest_added >= 6 {
+                    break;
+                }
+            }
+        }
+    }
+
+    // 6. Internal pages, Settings sub-pages, and commands.
     if ctx.commands_enabled {
         for cmd in [
             AddressCommand::Settings,
@@ -1128,6 +1341,57 @@ pub fn build_suggestions(typed: &str, ctx: &SuggestionContext<'_>) -> Vec<Sugges
         ] {
             if cmd.label().to_ascii_lowercase().contains(&lower) {
                 rows.push(SuggestionRow::Command(cmd));
+            }
+        }
+        for (kind, detail, label) in [
+            (InternalPageKind::Archive, None, "Archived Tabs"),
+            (InternalPageKind::Import, None, "Bring Things Over (Import)"),
+            (
+                InternalPageKind::ReleaseNotes,
+                None,
+                "What's New (Release Notes)",
+            ),
+            (
+                InternalPageKind::Settings,
+                Some("general"),
+                "Settings › General",
+            ),
+            (
+                InternalPageKind::Settings,
+                Some("search"),
+                "Settings › Search",
+            ),
+            (InternalPageKind::Settings, Some("tabs"), "Settings › Tabs"),
+            (
+                InternalPageKind::Settings,
+                Some("appearance"),
+                "Settings › Appearance",
+            ),
+            (
+                InternalPageKind::Settings,
+                Some("privacy"),
+                "Settings › Privacy",
+            ),
+            (
+                InternalPageKind::Settings,
+                Some("shortcuts"),
+                "Settings › Shortcuts",
+            ),
+            (
+                InternalPageKind::Settings,
+                Some("about"),
+                "Settings › About",
+            ),
+        ] {
+            if (label.to_ascii_lowercase().contains(&lower)
+                || detail.is_some_and(|d| d.contains(&lower)))
+                && let Ok(url) = kind.to_url(detail)
+            {
+                rows.push(SuggestionRow::InternalPage {
+                    kind,
+                    label: label.to_owned(),
+                    url,
+                });
             }
         }
     }
@@ -1413,5 +1677,80 @@ mod tests {
         assert!(
             matches!(rows.last(), Some(SuggestionRow::SearchWords { query, .. }) if query == "git")
         );
+    }
+
+    #[test]
+    fn full_suggestions_respect_private_tab_engine_suggest_gate_and_internal_pages() {
+        let bookmarks = BookmarkTree::new();
+        let sites = builtin_site_searches();
+        let engine = SearchEngine::Google;
+        let ctx = SuggestionContext {
+            current_tab: None,
+            open_tabs: &[],
+            history: &[],
+            bookmarks: &bookmarks,
+            site_searches: &sites,
+            engine: &engine,
+            commands_enabled: true,
+        };
+        let engine_suggestions = vec![
+            "privacy settings".to_owned(),
+            "privacy tools".to_owned(),
+            "x".repeat(81),
+        ];
+        let icloud_tabs = vec![ICloudTabCandidate {
+            device_name: "MacBook".into(),
+            title: "Privacy Audit".into(),
+            url: PageUrl::parse("https://example.com/privacy").expect("url"),
+        }];
+
+        let normal_rows = build_suggestions_full(
+            "privacy",
+            &ctx,
+            &SuggestionExtras {
+                private_tab: false,
+                search_suggest_enabled: true,
+                engine_suggestions: &engine_suggestions,
+                past_site_searches: &[],
+                icloud_tabs: &icloud_tabs,
+            },
+        );
+        assert!(
+            normal_rows
+                .iter()
+                .any(|r| matches!(r, SuggestionRow::EngineSuggestion { query, .. } if query == "privacy tools"))
+        );
+        assert!(!normal_rows.iter().any(
+            |r| matches!(r, SuggestionRow::EngineSuggestion { query, .. } if query.len() > 80)
+        ));
+        assert!(
+            normal_rows
+                .iter()
+                .any(|r| matches!(r, SuggestionRow::InternalPage { url, .. } if url.as_str() == "search://settings/privacy"))
+        );
+        assert!(
+            normal_rows
+                .iter()
+                .any(|r| matches!(r, SuggestionRow::ICloudTab { .. }))
+        );
+
+        let private_rows = build_suggestions_full(
+            "privacy",
+            &ctx,
+            &SuggestionExtras {
+                private_tab: true,
+                search_suggest_enabled: true,
+                engine_suggestions: &engine_suggestions,
+                past_site_searches: &[],
+                icloud_tabs: &icloud_tabs,
+            },
+        );
+        assert!(
+            !private_rows
+                .iter()
+                .any(|r| matches!(r, SuggestionRow::EngineSuggestion { .. }))
+        );
+        assert!(!should_query_search_suggestions("privacy", true, true));
+        assert!(should_query_search_suggestions("privacy", true, false));
     }
 }

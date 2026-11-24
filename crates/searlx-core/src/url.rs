@@ -168,6 +168,49 @@ impl PageUrl {
         }
     }
 
+    /// Address shown in the editable field (`FEATURES.md` §4.2):
+    /// strips the scheme (`https://` or local `http://`) **only** when typing
+    /// the string back into the field would resolve to the exact same URL.
+    /// Blank internal tabs (`search://`, `search://newtab`) return `""`.
+    #[must_use]
+    pub fn editable_address(&self) -> String {
+        if matches!(self.as_str(), "search://" | "search://newtab") {
+            return String::new();
+        }
+        let candidate = match self.0.scheme() {
+            "https" => self
+                .as_str()
+                .strip_prefix("https://")
+                .map(ToOwned::to_owned),
+            "http" => self.as_str().strip_prefix("http://").map(ToOwned::to_owned),
+            _ => None,
+        };
+        if let Some(mut stripped) = candidate {
+            if self.0.path() == "/"
+                && self.0.query().is_none()
+                && self.0.fragment().is_none()
+                && stripped.ends_with('/')
+            {
+                stripped.pop();
+            }
+            if !stripped.is_empty()
+                && !stripped.contains('@')
+                && matches!(
+                    crate::address::resolve_address_with_fs(
+                        &stripped,
+                        &crate::address::ParseOptions::default(),
+                        |_| false,
+                    ),
+                    crate::address::AddressResolution::Navigate(ref round_tripped)
+                        if round_tripped == self
+                )
+            {
+                return stripped;
+            }
+        }
+        self.as_str().to_owned()
+    }
+
     /// A form safe for logs and error messages.
     ///
     /// The path is kept; userinfo, query values, and fragments are removed.
@@ -373,5 +416,31 @@ mod tests {
         assert_eq!(json, "\"https://example.com/a\"");
         let back: PageUrl = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(url, back);
+    }
+
+    #[test]
+    fn editable_address_strips_scheme_only_when_round_trip_matches() {
+        let https_root = PageUrl::parse("https://example.com/").expect("https root");
+        assert_eq!(https_root.editable_address(), "example.com");
+
+        let https_www = PageUrl::parse("https://www.example.com/a?q=1#top").expect("https www");
+        assert_eq!(https_www.editable_address(), "www.example.com/a?q=1#top");
+
+        // Plain HTTP on a public host keeps `http://` because typing it back would upgrade to HTTPS!
+        let http_public = PageUrl::parse("http://example.com/a").expect("http public");
+        assert_eq!(http_public.editable_address(), "http://example.com/a");
+
+        // Local HTTP strips `http://` because typing `localhost:3000/api` restores HTTP.
+        let http_local = PageUrl::parse("http://localhost:3000/api").expect("http local");
+        assert_eq!(http_local.editable_address(), "localhost:3000/api");
+
+        // HTTPS on localhost keeps `https://` because bare `localhost` resolves to HTTP.
+        let https_local = PageUrl::parse("https://localhost:3000/api").expect("https local");
+        assert_eq!(https_local.editable_address(), "https://localhost:3000/api");
+
+        let blank = PageUrl::parse("search://").expect("blank");
+        assert_eq!(blank.editable_address(), "");
+        let settings = PageUrl::parse("search://settings/privacy").expect("settings");
+        assert_eq!(settings.editable_address(), "search://settings/privacy");
     }
 }

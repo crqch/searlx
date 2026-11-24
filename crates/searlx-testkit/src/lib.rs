@@ -9,8 +9,10 @@ use searlx_engine::{
 };
 
 pub mod bench;
+pub mod driver;
 
 pub use bench::{PerformanceBudgets, PerformanceMeasurements, verify_performance_budgets};
+pub use driver::{ControllerDriver, DriverError, DriverResult};
 
 /// A failure from a contract check.
 #[derive(Debug, thiserror::Error)]

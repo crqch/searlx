@@ -413,6 +413,23 @@ impl PasswordVault {
     pub fn is_empty(&self) -> bool {
         self.accounts.is_empty()
     }
+
+    /// Masked read-only summary tuples `(host, username, last_used, saved_from_clear_http)`
+    /// for `search://passwords`, without exposing secret material (`AGENTS.md` §2).
+    #[must_use]
+    pub fn masked_entries(&self) -> Vec<(String, String, String, bool)> {
+        self.accounts
+            .iter()
+            .map(|a| {
+                (
+                    a.host.clone(),
+                    a.username.clone(),
+                    a.last_used.clone(),
+                    a.saved_from_clear_http,
+                )
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]

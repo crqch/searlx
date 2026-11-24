@@ -119,9 +119,14 @@ pub fn detect_markdown_twin_link(html: &str) -> Option<String> {
         };
         let tag_end = tag_start + end_offset + 1;
         let raw_tag = &html[tag_start..tag_end];
-        let lower_tag = &lower[tag_start..tag_end];
-        if lower_tag.contains("rel=\"alternate\"")
-            && lower_tag.contains("type=\"text/markdown\"")
+        let is_alternate = extract_attribute(raw_tag, "rel").is_some_and(|v| {
+            v.split_whitespace()
+                .any(|w| w.eq_ignore_ascii_case("alternate"))
+        });
+        let is_markdown = extract_attribute(raw_tag, "type")
+            .is_some_and(|v| v.trim().eq_ignore_ascii_case("text/markdown"));
+        if is_alternate
+            && is_markdown
             && let Some(href) = extract_attribute(raw_tag, "href")
         {
             return Some(href);
@@ -384,16 +389,107 @@ fn sanitize_and_preserve_blocks(raw: &str) -> (String, usize, usize, usize) {
     let plain = strip_tags(raw);
     let text_len = plain.trim().len();
 
-    // Remove inline on* event handlers and javascript: hrefs while keeping structure.
+    // Remove inline on* event handlers and javascript:/vbscript: hrefs while keeping structure.
     let mut safe = remove_element_block(raw, "script");
     safe = remove_element_block(&safe, "style");
-    safe = safe.replace("javascript:", "blocked:");
+    safe = strip_inline_event_handlers(&safe);
+    safe = replace_ascii_case_insensitive(&safe, "javascript:", "blocked:");
+    safe = replace_ascii_case_insensitive(&safe, "vbscript:", "blocked:");
     if tables > 0 && !safe.contains("table-wrap") {
         safe = safe
             .replace("<table", "<div class=\"table-wrap\"><table")
             .replace("</table>", "</table></div>");
     }
     (safe, text_len, code_blocks, tables)
+}
+
+fn replace_ascii_case_insensitive(input: &str, needle: &str, replacement: &str) -> String {
+    let lower = input.to_ascii_lowercase();
+    let needle_lower = needle.to_ascii_lowercase();
+    if needle_lower.is_empty() {
+        return input.to_owned();
+    }
+    let mut out = String::with_capacity(input.len());
+    let mut cursor = 0_usize;
+    while let Some(rel) = lower[cursor..].find(&needle_lower) {
+        let idx = cursor + rel;
+        out.push_str(&input[cursor..idx]);
+        out.push_str(replacement);
+        cursor = idx + needle.len();
+    }
+    out.push_str(&input[cursor..]);
+    out
+}
+
+fn strip_inline_event_handlers(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut cursor = 0_usize;
+    while let Some(open_rel) = html[cursor..].find('<') {
+        let open = cursor + open_rel;
+        out.push_str(&html[cursor..open]);
+        let Some(close_rel) = html[open..].find('>') else {
+            out.push_str(&html[open..]);
+            return out;
+        };
+        let close = open + close_rel + 1;
+        out.push_str(&strip_events_in_tag(&html[open..close]));
+        cursor = close;
+    }
+    out.push_str(&html[cursor..]);
+    out
+}
+
+fn strip_events_in_tag(tag: &str) -> String {
+    let bytes = tag.as_bytes();
+    let mut out = String::with_capacity(tag.len());
+    let mut i = 0_usize;
+    while i < bytes.len() {
+        let is_attr_boundary = i > 0 && bytes[i - 1].is_ascii_whitespace();
+        if is_attr_boundary
+            && i + 3 < bytes.len()
+            && (bytes[i] == b'o' || bytes[i] == b'O')
+            && (bytes[i + 1] == b'n' || bytes[i + 1] == b'N')
+            && bytes[i + 2].is_ascii_alphabetic()
+        {
+            let mut j = i + 2;
+            while j < bytes.len() && bytes[j].is_ascii_alphanumeric() {
+                j += 1;
+            }
+            let mut eq = j;
+            while eq < bytes.len() && bytes[eq].is_ascii_whitespace() {
+                eq += 1;
+            }
+            if eq < bytes.len() && bytes[eq] == b'=' {
+                let mut val = eq + 1;
+                while val < bytes.len() && bytes[val].is_ascii_whitespace() {
+                    val += 1;
+                }
+                if val < bytes.len() && (bytes[val] == b'"' || bytes[val] == b'\'') {
+                    let quote = bytes[val];
+                    val += 1;
+                    while val < bytes.len() && bytes[val] != quote {
+                        val += 1;
+                    }
+                    if val < bytes.len() {
+                        val += 1;
+                    }
+                } else {
+                    while val < bytes.len()
+                        && !bytes[val].is_ascii_whitespace()
+                        && bytes[val] != b'>'
+                    {
+                        val += 1;
+                    }
+                }
+                i = val;
+                continue;
+            }
+        }
+        let ch = tag[i..].chars().next().unwrap_or(' ');
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
 }
 
 fn extract_tag_text(html: &str, tag: &str) -> Option<String> {
@@ -412,10 +508,37 @@ fn extract_tag_text(html: &str, tag: &str) -> Option<String> {
 
 fn extract_attribute(tag: &str, attr_name: &str) -> Option<String> {
     let lower = tag.to_ascii_lowercase();
-    let pat = format!("{attr_name}=\"");
-    let start = lower.find(&pat)? + pat.len();
-    let end = tag[start..].find('"')?;
-    Some(tag[start..start + end].to_owned())
+    let needle = attr_name.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let mut search = 0_usize;
+    while let Some(pos) = lower[search..].find(&needle) {
+        let start = search + pos;
+        let boundary_ok = start == 0 || bytes[start - 1].is_ascii_whitespace();
+        let after_name = start + needle.len();
+        if boundary_ok {
+            let mut eq = after_name;
+            while eq < bytes.len() && bytes[eq].is_ascii_whitespace() {
+                eq += 1;
+            }
+            if eq < bytes.len() && bytes[eq] == b'=' {
+                let mut val_start = eq + 1;
+                while val_start < bytes.len() && bytes[val_start].is_ascii_whitespace() {
+                    val_start += 1;
+                }
+                if val_start < bytes.len()
+                    && (bytes[val_start] == b'"' || bytes[val_start] == b'\'')
+                {
+                    let quote = bytes[val_start] as char;
+                    let content_start = val_start + 1;
+                    if let Some(end) = tag[content_start..].find(quote) {
+                        return Some(tag[content_start..content_start + end].to_owned());
+                    }
+                }
+            }
+        }
+        search = after_name;
+    }
+    None
 }
 
 fn strip_tags(html: &str) -> String {
@@ -524,5 +647,19 @@ mod tests {
         assert!(md_article.used_markdown_twin);
         assert_eq!(md_article.code_blocks, 1);
         assert_eq!(md_article.tables, 1);
+
+        let single_quoted = "<html><head><link type='text/markdown' rel='alternate' href='/sq.md'></head><body><article><h1>Hi</h1><p onclick=\"alert(1)\"><a href=\"JaVaScRiPt:alert(2)\">body prose long enough</a></p></article></body></html>";
+        assert_eq!(
+            detect_markdown_twin_link(single_quoted).as_deref(),
+            Some("/sq.md")
+        );
+        let sq_article = extract_article(single_quoted, &code_url, false, false);
+        assert!(!sq_article.content_html.contains("onclick"));
+        assert!(
+            !sq_article
+                .content_html
+                .to_ascii_lowercase()
+                .contains("javascript:")
+        );
     }
 }
