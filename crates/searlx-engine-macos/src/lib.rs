@@ -1,18 +1,23 @@
 //! WKWebView backend (macOS) — `P0-03`, `P1-04`.
 //!
-//! Provides the `Engine` contract implementation for macOS (`WkWebViewEngine`)
-//! with WKWebView's capability flags and ephemeral/persistent `WKWebsiteDataStore`
-//! isolation. Physical `objc2-web-kit` window embedding verification requires a
-//! macOS host (`TODO.md` P0-03, P1-04).
+//! Provides the `Engine` capability descriptor and non-native unsupported
+//! handling for macOS (`WkWebViewEngine`). Physical `objc2-web-kit` window
+//! embedding verification requires a macOS host (`TODO.md` P0-03, P1-04).
 
 use searlx_core::{PageUrl, ProfileId, SpaceId, TabId};
 use searlx_engine::{
-    Capabilities, DataKinds, DataStoreHandle, Engine, EngineEvent, EngineResult, FakeEngine,
+    Capabilities, DataKinds, DataStoreHandle, Engine, EngineError, EngineEvent, EngineResult,
     FindOptions, FindState, Image, InjectAt, Rect, ScriptWorld, TabOptions,
 };
 
 /// The backend's name.
 pub const ENGINE_NAME: &str = "wkwebview";
+
+#[cfg(not(target_os = "macos"))]
+const UNSUPPORTED_MSG: &str = "WKWebView is only supported on macOS";
+#[cfg(target_os = "macos")]
+const UNSUPPORTED_MSG: &str =
+    "WKWebView native objc2-web-kit backend is not yet wired on this build";
 
 /// Capabilities supported by macOS `WKWebView` (`FEATURES.md` §20, `docs/spike/capabilities.md`).
 #[must_use]
@@ -33,118 +38,122 @@ pub fn target_capabilities() -> Capabilities {
     capabilities
 }
 
-/// macOS `WKWebView` engine implementation behind `searlx_engine::Engine` (`P1-04`).
-#[derive(Debug)]
+/// macOS `WKWebView` engine handle behind `searlx_engine::Engine` (`P1-04`).
+///
+/// On non-macOS hosts (and until native `objc2-web-kit` bindings are wired on
+/// macOS), every engine operation honestly returns [`EngineError::NotSupported`]
+/// rather than delegating to a fake engine (`AGENTS.md` §2.4).
+#[derive(Debug, Default)]
 pub struct WkWebViewEngine {
-    inner: FakeEngine,
-}
-
-impl Default for WkWebViewEngine {
-    fn default() -> Self {
-        Self::new()
-    }
+    _private: (),
 }
 
 impl WkWebViewEngine {
-    /// Create a new `WkWebViewEngine`.
+    /// Construct a `WkWebViewEngine` handle.
     #[must_use]
-    pub fn new() -> Self {
-        Self {
-            inner: FakeEngine::new(target_capabilities()),
-        }
+    pub const fn new() -> Self {
+        Self { _private: () }
+    }
+
+    /// Attempt to initialize a live native `WKWebView` engine.
+    ///
+    /// Returns [`EngineError::NotSupported`] on non-macOS platforms or when the
+    /// native `objc2-web-kit` backend is unavailable.
+    pub fn try_new() -> EngineResult<Self> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 }
 
 impl Engine for WkWebViewEngine {
-    fn create_tab(&mut self, options: TabOptions) -> EngineResult<TabId> {
-        self.inner.create_tab(options)
+    fn create_tab(&mut self, _options: TabOptions) -> EngineResult<TabId> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn close_tab(&mut self, id: TabId) -> EngineResult<()> {
-        self.inner.close_tab(id)
+    fn close_tab(&mut self, _id: TabId) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn navigate(&mut self, id: TabId, url: PageUrl) -> EngineResult<()> {
-        self.inner.navigate(id, url)
+    fn navigate(&mut self, _id: TabId, _url: PageUrl) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn back(&mut self, id: TabId) -> EngineResult<()> {
-        self.inner.back(id)
+    fn back(&mut self, _id: TabId) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn forward(&mut self, id: TabId) -> EngineResult<()> {
-        self.inner.forward(id)
+    fn forward(&mut self, _id: TabId) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn reload(&mut self, id: TabId, from_origin: bool) -> EngineResult<()> {
-        self.inner.reload(id, from_origin)
+    fn reload(&mut self, _id: TabId, _from_origin: bool) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn stop(&mut self, id: TabId) -> EngineResult<()> {
-        self.inner.stop(id)
+    fn stop(&mut self, _id: TabId) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn eval(&mut self, id: TabId, world: ScriptWorld, js: &str) -> EngineResult<()> {
-        self.inner.eval(id, world, js)
+    fn eval(&mut self, _id: TabId, _world: ScriptWorld, _js: &str) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
     fn inject(
         &mut self,
-        id: TabId,
-        world: ScriptWorld,
-        at: InjectAt,
-        js: &str,
+        _id: TabId,
+        _world: ScriptWorld,
+        _at: InjectAt,
+        _js: &str,
     ) -> EngineResult<()> {
-        self.inner.inject(id, world, at, js)
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn set_bounds(&mut self, id: TabId, rect: Rect) -> EngineResult<()> {
-        self.inner.set_bounds(id, rect)
+    fn set_bounds(&mut self, _id: TabId, _rect: Rect) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn set_visible(&mut self, id: TabId, visible: bool) -> EngineResult<()> {
-        self.inner.set_visible(id, visible)
+    fn set_visible(&mut self, _id: TabId, _visible: bool) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn focus(&mut self, id: TabId) -> EngineResult<()> {
-        self.inner.focus(id)
+    fn focus(&mut self, _id: TabId) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn snapshot(&mut self, id: TabId) -> EngineResult<Image> {
-        self.inner.snapshot(id)
+    fn snapshot(&mut self, _id: TabId) -> EngineResult<Image> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn find(&mut self, id: TabId, query: &str, options: FindOptions) -> EngineResult<FindState> {
-        self.inner.find(id, query, options)
+    fn find(&mut self, _id: TabId, _query: &str, _options: FindOptions) -> EngineResult<FindState> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn set_zoom(&mut self, id: TabId, zoom: f64) -> EngineResult<()> {
-        self.inner.set_zoom(id, zoom)
+    fn set_zoom(&mut self, _id: TabId, _zoom: f64) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn set_muted(&mut self, id: TabId, muted: bool) -> EngineResult<()> {
-        self.inner.set_muted(id, muted)
+    fn set_muted(&mut self, _id: TabId, _muted: bool) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
     fn data_store(
         &mut self,
-        space: SpaceId,
-        profile: ProfileId,
-        private: bool,
+        _space: SpaceId,
+        _profile: ProfileId,
+        _private: bool,
     ) -> EngineResult<DataStoreHandle> {
-        self.inner.data_store(space, profile, private)
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn clear_data(&mut self, store: DataStoreHandle, kinds: DataKinds) -> EngineResult<()> {
-        self.inner.clear_data(store, kinds)
+    fn clear_data(&mut self, _store: DataStoreHandle, _kinds: DataKinds) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
     fn capabilities(&self) -> Capabilities {
-        self.inner.capabilities()
+        target_capabilities()
     }
 
     fn pump(&mut self) -> EngineResult<Vec<EngineEvent>> {
-        self.inner.pump()
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 }
 
@@ -153,36 +162,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn wkwebview_engine_switches_tabs_without_reload_and_isolates_ephemeral_store() {
+    fn target_capabilities_describe_wkwebview_accurately() {
+        let caps = target_capabilities();
+        assert_eq!(caps.engine, ENGINE_NAME);
+        assert!(caps.extensions);
+        assert!(caps.passkeys);
+        assert!(caps.content_blockers);
+        assert!(caps.native_pip);
+        assert!(caps.site_isolation);
+        assert!(caps.custom_user_agent);
+        assert!(caps.print);
+        assert!(caps.pdf);
+        assert!(caps.find_while_pdf);
+        assert!(caps.downloads_pause);
+        assert!(caps.cookie_import);
+        assert!(caps.floating_video);
+        assert!(!caps.wayland_overlay);
+    }
+
+    #[test]
+    fn wkwebview_engine_honestly_reports_unsupported_without_native_binding() {
+        assert!(matches!(
+            WkWebViewEngine::try_new(),
+            Err(EngineError::NotSupported(_))
+        ));
+
         let mut engine = WkWebViewEngine::new();
-        let space = SpaceId::new();
-        let profile = ProfileId::new();
-        let t1 = engine
-            .create_tab(TabOptions {
-                url: Some(PageUrl::parse("https://example.com/mac1").expect("url")),
-                space,
-                profile,
-                private: false,
-                ..TabOptions::default()
-            })
-            .expect("t1");
-        let t2 = engine
-            .create_tab(TabOptions {
-                url: Some(PageUrl::parse("https://example.com/mac2").expect("url")),
-                space,
-                profile,
-                private: true,
-                ..TabOptions::default()
-            })
-            .expect("t2");
-        let _ = engine.pump().expect("initial events");
-
-        engine.set_visible(t1, false).expect("hide t1");
-        engine.set_visible(t2, true).expect("show t2");
-        engine.focus(t2).expect("focus t2");
-        assert!(engine.pump().expect("switch events").is_empty());
-
-        let store = engine.data_store(space, profile, true).expect("store");
-        assert!(store.ephemeral);
+        assert_eq!(engine.capabilities(), target_capabilities());
+        assert!(matches!(
+            engine.create_tab(TabOptions::default()),
+            Err(EngineError::NotSupported(_))
+        ));
+        assert!(matches!(
+            engine.data_store(SpaceId::new(), ProfileId::new(), true),
+            Err(EngineError::NotSupported(_))
+        ));
+        assert!(matches!(engine.pump(), Err(EngineError::NotSupported(_))));
     }
 }
