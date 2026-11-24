@@ -1568,6 +1568,10 @@ pub struct BrowserController {
     compositor: StoreCompositor,
     /// Isolated per-space history managers for `SpaceStorePolicy::OwnStore` spaces.
     isolated_histories: BTreeMap<SpaceId, HistoryManager>,
+    /// Empty fallback history returned for `OwnStore` spaces before their first visit.
+    empty_history: HistoryManager,
+    /// Snapshots of member tabs saved when closing a tab group for `ReopenClosedGroup`.
+    closed_group_snapshots: BTreeMap<GroupId, Vec<ClosedTabSnapshot>>,
     /// Per-profile bookmarks managers.
     bookmarks: BTreeMap<ProfileId, BookmarksManager>,
     /// File downloads manager.
@@ -1709,6 +1713,8 @@ impl BrowserController {
             runtimes,
             compositor,
             isolated_histories: BTreeMap::new(),
+            empty_history: HistoryManager::new(),
+            closed_group_snapshots: BTreeMap::new(),
             bookmarks,
             downloads: DownloadsManager::new(),
             blocker_paused_sites: BTreeSet::new(),
@@ -1982,11 +1988,34 @@ impl BrowserController {
             .spaces
             .space(space_id)
             .is_some_and(SpaceEntry::uses_own_history_file)
-            && let Some(isolated) = self.isolated_histories.get(&space_id)
         {
-            return isolated;
+            return self
+                .isolated_histories
+                .get(&space_id)
+                .unwrap_or(&self.empty_history);
         }
         &self.compositor.history
+    }
+
+    fn record_visit_for_space(&mut self, space_id: SpaceId, url: PageUrl, title: &str) {
+        let uses_own_history = self
+            .spaces
+            .space(space_id)
+            .is_some_and(SpaceEntry::uses_own_history_file);
+        if uses_own_history {
+            self.isolated_histories
+                .entry(space_id)
+                .or_default()
+                .record_visit(url, title, &self.now_iso, false, Some(space_id.to_string()));
+        } else {
+            self.compositor.history.record_visit(
+                url,
+                title,
+                &self.now_iso,
+                false,
+                Some(space_id.to_string()),
+            );
+        }
     }
 
     /// Active profile's `BookmarksManager`.
@@ -2233,29 +2262,56 @@ impl BrowserController {
             }
             AppCommand::CloseGroup { group } => {
                 let closed = self.tab_groups.close_group(group)?;
-                for tab in closed.group.tabs {
-                    if let Some((space, _)) = self.find_tab(tab)
-                        && let Some(model) = self.space_tabs.get_mut(&space)
+                let mut group_snaps = Vec::new();
+                for &tab in &closed.group.tabs {
+                    if let Some((space, tab_snap)) = self.find_tab(tab).map(|(s, t)| (s, t.clone()))
                     {
-                        if let Some(entry) = model.tab_mut(tab) {
+                        if !tab_snap.private {
+                            let rt = self.runtimes.get(&tab);
+                            let scroll = rt
+                                .and_then(|r| r.navigation.current_entry())
+                                .map_or((0.0, 0.0), |e| e.scroll);
+                            let navigation = rt.map_or_else(
+                                || {
+                                    let mut nav = TabNavigation::new(false);
+                                    nav.commit_navigation(
+                                        tab_snap.url.clone(),
+                                        tab_snap.display_title().to_owned(),
+                                    );
+                                    nav
+                                },
+                                |r| r.navigation.clone(),
+                            );
+                            group_snaps.push(ClosedTabSnapshot {
+                                space,
+                                url: tab_snap.url.clone(),
+                                title: tab_snap.display_title().to_owned(),
+                                group: Some(group),
+                                scroll,
+                                navigation,
+                            });
+                        }
+                        if let Some(model) = self.space_tabs.get_mut(&space)
+                            && let Some(entry) = model.tab_mut(tab)
+                        {
                             entry.group = None;
                             entry.put_away = false;
                         }
-                        self.close_tab_removing_webview(space, tab, &mut directives)?;
+                        self.close_tab_removing_webview_with_record(
+                            space,
+                            tab,
+                            false,
+                            &mut directives,
+                        )?;
                     }
+                }
+                if !group_snaps.is_empty() {
+                    self.closed_group_snapshots.insert(group, group_snaps);
                 }
                 self.reconcile_visible_tabs(&mut directives)?;
             }
             AppCommand::ReopenClosedGroup => {
-                if let Some(restored) = self.tab_groups.reopen_last_closed_group() {
-                    let space = self.active_space_id();
-                    if let Some(model) = self.space_tabs.get_mut(&space) {
-                        for _tab in restored.group.tabs {
-                            // Ensure group metadata returns cleanly.
-                        }
-                        let _ = model;
-                    }
-                }
+                self.cmd_reopen_closed_group(&mut directives)?;
             }
             AppCommand::CreatePinFolder { name, parent_id } => {
                 let fid = format!("pf-{}", PinId::new());
@@ -2383,6 +2439,12 @@ impl BrowserController {
                     TabRuntime::new(false, self.settings.page_zoom, self.now_secs),
                 );
                 self.space_tabs.insert(space_id, model);
+                if store_policy == SpaceStorePolicy::OwnStore {
+                    let suffix = format!("space-{space_id}");
+                    let hist =
+                        HistoryManager::load_from(&self.store, Some(&suffix)).unwrap_or_default();
+                    self.isolated_histories.insert(space_id, hist);
+                }
             }
             AppCommand::RenameSpace { space, name } => {
                 let trimmed = name.trim();
@@ -3176,13 +3238,7 @@ impl BrowserController {
                         t.letter = letter_for(&entry.url, &title);
                     }
                     if self.compositor.allows_durable_writes(tab) {
-                        self.compositor.history.record_visit(
-                            entry.url,
-                            &title,
-                            &self.now_iso,
-                            false,
-                            Some(space.to_string()),
-                        );
+                        self.record_visit_for_space(space, entry.url, &title);
                     }
                 }
             }
@@ -3759,6 +3815,20 @@ impl BrowserController {
         opener: Option<TabId>,
         directives: &mut Vec<EngineDirective>,
     ) -> Result<TabId> {
+        self.cmd_new_tab_in_space_reconcile(space, url, private, activate, opener, true, directives)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn cmd_new_tab_in_space_reconcile(
+        &mut self,
+        space: SpaceId,
+        url: Option<PageUrl>,
+        private: bool,
+        activate: bool,
+        opener: Option<TabId>,
+        reconcile: bool,
+        directives: &mut Vec<EngineDirective>,
+    ) -> Result<TabId> {
         let title = url
             .as_ref()
             .map_or_else(|| "New Tab".to_owned(), PageUrl::display);
@@ -3807,7 +3877,7 @@ impl BrowserController {
                     .map_or_else(String::new, PageUrl::editable_address);
             }
         }
-        if space == self.active_space_id() {
+        if reconcile && space == self.active_space_id() {
             self.reconcile_visible_tabs(directives)?;
         }
         Ok(new_id)
@@ -3879,6 +3949,16 @@ impl BrowserController {
         tab_id: TabId,
         directives: &mut Vec<EngineDirective>,
     ) -> Result<()> {
+        self.close_tab_removing_webview_with_record(space, tab_id, true, directives)
+    }
+
+    fn close_tab_removing_webview_with_record(
+        &mut self,
+        space: SpaceId,
+        tab_id: TabId,
+        record_closed: bool,
+        directives: &mut Vec<EngineDirective>,
+    ) -> Result<()> {
         let tab_snap = self
             .space_tabs
             .get(&space)
@@ -3899,7 +3979,7 @@ impl BrowserController {
             self.visible_engine_tabs.remove(&tab_id);
         }
 
-        if !tab_snap.private && !tab_snap.pinned {
+        if record_closed && !tab_snap.private && !tab_snap.pinned {
             let scroll = runtime
                 .as_ref()
                 .and_then(|r| r.navigation.current_entry())
@@ -4011,6 +4091,107 @@ impl BrowserController {
         Ok(())
     }
 
+    fn cmd_reopen_closed_group(&mut self, directives: &mut Vec<EngineDirective>) -> Result<()> {
+        let Some(restored) = self.tab_groups.reopen_last_closed_group() else {
+            return Ok(());
+        };
+        let snapshots = self
+            .closed_group_snapshots
+            .remove(&restored.group.id)
+            .unwrap_or_default();
+        if snapshots.is_empty() {
+            let _ = self
+                .tab_groups
+                .replace_group_tabs(restored.group.id, Vec::new());
+            return Ok(());
+        }
+        let target_space = if self.space_tabs.contains_key(&restored.space) {
+            restored.space
+        } else {
+            self.active_space_id()
+        };
+        if target_space != restored.space {
+            let _ = self
+                .tab_groups
+                .move_group_to_space(restored.group.id, target_space);
+        }
+        if target_space != self.active_space_id() {
+            self.cmd_switch_space_inner(target_space, true, false, directives)?;
+        }
+
+        let mut restored_ids = Vec::with_capacity(snapshots.len());
+        for (idx, snap) in snapshots.into_iter().enumerate() {
+            let activate = idx == 0;
+            let new_id = self.cmd_new_tab_in_space_reconcile(
+                target_space,
+                Some(snap.url.clone()),
+                false,
+                activate,
+                None,
+                false,
+                directives,
+            )?;
+            let mut is_sleeping = false;
+            if let Some(model) = self.space_tabs.get_mut(&target_space)
+                && let Some(entry) = model.tab_mut(new_id)
+            {
+                entry.title = snap.title;
+                entry.letter = letter_for(&entry.url, &entry.title);
+                entry.group = Some(restored.group.id);
+                entry.put_away = false;
+                is_sleeping = entry.sleeping;
+            }
+            if let Some(rt) = self.runtimes.get_mut(&new_id) {
+                rt.navigation = snap.navigation;
+                rt.pending_scroll_restore = Some(snap.scroll);
+                if !snap.url.is_internal() && !is_sleeping {
+                    rt.skip_nav_stack_push_once = true;
+                }
+            }
+            restored_ids.push(new_id);
+        }
+        let _ = self
+            .tab_groups
+            .replace_group_tabs(restored.group.id, restored_ids);
+        self.reconcile_visible_tabs(directives)?;
+        Ok(())
+    }
+
+    fn maybe_start_floating_on_leave_tab(&mut self, outgoing_space: SpaceId, prev_tab: &TabEntry) {
+        if !self.settings.float_leave {
+            return;
+        }
+        let Some(prev_rt) = self.runtimes.get(&prev_tab.id) else {
+            return;
+        };
+        if !prev_rt.media_playing {
+            return;
+        }
+        let disabled = if prev_tab.private {
+            &self.private_dont_float_sites
+        } else {
+            &self.dont_float_sites
+        };
+        let preferred_style = match self.settings.float_style {
+            SettingsFloatStyle::Search => CoreFloatStyle::SearchPanel,
+            SettingsFloatStyle::System => CoreFloatStyle::SystemPip,
+        };
+        let _ = self.floating_video.try_start(
+            prev_tab.id,
+            outgoing_space,
+            &prev_tab.url,
+            prev_tab.private,
+            true,
+            prev_rt.video_duration_secs,
+            FloatTrigger::LeaveTab,
+            preferred_style,
+            self.capabilities.native_pip,
+            self.settings.float_leave,
+            self.settings.float_away,
+            disabled,
+        );
+    }
+
     fn cmd_activate_tab(
         &mut self,
         tab_id: TabId,
@@ -4019,40 +4200,14 @@ impl BrowserController {
         let Some((space, _)) = self.find_tab(tab_id) else {
             return Err(CoreError::Invalid(format!("no such tab: {tab_id}")));
         };
-        if space != self.active_space_id() {
-            self.cmd_switch_space(space, directives)?;
-        }
-
-        // Check if leaving a tab triggers floating video.
+        let prev_space = self.active_space_id();
         if let Some(prev_tab) = self.active_tab_entry().cloned()
             && prev_tab.id != tab_id
-            && self.settings.float_leave
-            && let Some(prev_rt) = self.runtimes.get(&prev_tab.id)
-            && prev_rt.media_playing
         {
-            let disabled = if prev_tab.private {
-                &self.private_dont_float_sites
-            } else {
-                &self.dont_float_sites
-            };
-            let preferred_style = match self.settings.float_style {
-                SettingsFloatStyle::Search => CoreFloatStyle::SearchPanel,
-                SettingsFloatStyle::System => CoreFloatStyle::SystemPip,
-            };
-            let _ = self.floating_video.try_start(
-                prev_tab.id,
-                space,
-                &prev_tab.url,
-                prev_tab.private,
-                true,
-                prev_rt.video_duration_secs,
-                FloatTrigger::LeaveTab,
-                preferred_style,
-                self.capabilities.native_pip,
-                self.settings.float_leave,
-                self.settings.float_away,
-                disabled,
-            );
+            self.maybe_start_floating_on_leave_tab(prev_space, &prev_tab);
+        }
+        if space != prev_space {
+            self.cmd_switch_space_inner(space, false, false, directives)?;
         }
 
         let model = self
@@ -4300,18 +4455,36 @@ impl BrowserController {
         let outcome = self
             .space_tabs
             .get_mut(&space)
-            .map(TabModel::commit_drag)
+            .map(TabModel::commit_drag_with_payload)
             .transpose()?
             .flatten();
-        if let Some(DropTarget::PageSplitEdge { target_tab, side }) = outcome
-            && let Some(active_id) = self.active_tab_id()
-            && active_id != target_tab
+        if let Some((DragPayload::Tab(dragged_id), DropTarget::PageSplitEdge { target_tab, side })) =
+            outcome
+            && dragged_id != target_tab
+            && self
+                .space_tabs
+                .get(&space)
+                .is_some_and(|m| m.tab(dragged_id).is_some() && m.tab(target_tab).is_some())
         {
-            let panes = match side {
-                crate::tabs::SplitDropSide::Left => vec![target_tab, active_id],
-                crate::tabs::SplitDropSide::Right => vec![active_id, target_tab],
-            };
-            self.splits.create_split(space, panes)?;
+            if let Some(split) = self.splits.split_containing(space, target_tab).cloned() {
+                if split.panes.len() < 4 && !split.panes.contains(&dragged_id) {
+                    let mut new_panes = split.panes;
+                    if let Some(pos) = new_panes.iter().position(|&p| p == target_tab) {
+                        let insert_at = match side {
+                            crate::tabs::SplitDropSide::Left => pos,
+                            crate::tabs::SplitDropSide::Right => pos + 1,
+                        };
+                        new_panes.insert(insert_at, dragged_id);
+                    }
+                    self.splits.create_split(space, new_panes)?;
+                }
+            } else {
+                let panes = match side {
+                    crate::tabs::SplitDropSide::Left => vec![dragged_id, target_tab],
+                    crate::tabs::SplitDropSide::Right => vec![target_tab, dragged_id],
+                };
+                self.splits.create_split(space, panes)?;
+            }
             self.reconcile_visible_tabs(directives)?;
         }
         Ok(())
@@ -4717,9 +4890,22 @@ impl BrowserController {
         target_space: SpaceId,
         directives: &mut Vec<EngineDirective>,
     ) -> Result<()> {
+        self.cmd_switch_space_inner(target_space, true, true, directives)
+    }
+
+    fn cmd_switch_space_inner(
+        &mut self,
+        target_space: SpaceId,
+        trigger_leave_float: bool,
+        reconcile: bool,
+        directives: &mut Vec<EngineDirective>,
+    ) -> Result<()> {
         let cur_space = self.active_space_id();
         if cur_space == target_space {
             return Ok(());
+        }
+        if trigger_leave_float && let Some(prev_tab) = self.active_tab_entry().cloned() {
+            self.maybe_start_floating_on_leave_tab(cur_space, &prev_tab);
         }
         // Hide visible webviews in outgoing space without destroying them.
         for tab_id in std::mem::take(&mut self.visible_engine_tabs) {
@@ -4755,7 +4941,9 @@ impl BrowserController {
         if let Some(tab) = self.active_tab_entry() {
             self.address_input = tab.url.editable_address();
         }
-        self.reconcile_visible_tabs(directives)?;
+        if reconcile {
+            self.reconcile_visible_tabs(directives)?;
+        }
         Ok(())
     }
 
@@ -5404,22 +5592,30 @@ impl BrowserController {
                     .compositor
                     .history
                     .clear_history(&scope, Some(&self.store))?;
-                for hist in self.isolated_histories.values_mut() {
-                    let _ = hist.clear_history(&ClearHistoryScope::All, None)?;
+                let own_spaces: Vec<SpaceId> = self.isolated_histories.keys().copied().collect();
+                for sid in own_spaces {
+                    if let Some(hist) = self.isolated_histories.get_mut(&sid) {
+                        let _ = hist.clear_history(&ClearHistoryScope::All, None)?;
+                        let suffix = format!("space-{sid}");
+                        hist.save_to(&self.store, Some(&suffix))?;
+                    }
                 }
+                self.downloads.strip_source_urls();
                 self.compositor.favicons.clear();
+                self.compositor.clear_handoff();
                 self.past_site_searches.clear();
                 self.closed_tabs.clear();
+                self.closed_group_snapshots.clear();
             }
             ClearHistoryScope::SignedOutSpace(space_str) => {
-                let _ = self
-                    .compositor
-                    .history
-                    .clear_history(&scope, Some(&self.store))?;
-                if let Ok(sid) = SpaceId::parse(space_str)
-                    && let Some(hist) = self.isolated_histories.get_mut(&sid)
-                {
-                    let _ = hist.clear_history(&ClearHistoryScope::All, None)?;
+                let _ = self.compositor.history.clear_history(&scope, None)?;
+                if let Ok(sid) = SpaceId::parse(space_str) {
+                    if let Some(hist) = self.isolated_histories.get_mut(&sid) {
+                        let _ = hist.clear_history(&ClearHistoryScope::All, None)?;
+                        let suffix = format!("space-{sid}");
+                        hist.save_to(&self.store, Some(&suffix))?;
+                    }
+                    self.closed_tabs.retain(|c| c.space != sid);
                 }
             }
         }
@@ -5865,21 +6061,49 @@ impl BrowserController {
             }
         }
 
-        // Wake & materialize every tab in `visible_list` (active tab + visible split panes).
-        for &tab_id in &visible_list {
-            let Some(entry_snap) = self.space_tabs.get_mut(&active_space).and_then(|model| {
+        // Wake every tab in `visible_list` (active tab + visible split panes).
+        if let Some(model) = self.space_tabs.get_mut(&active_space) {
+            for &tab_id in &visible_list {
                 model.wake_tab(tab_id);
-                model.tab(tab_id).cloned()
-            }) else {
+            }
+        }
+
+        // Materialize every non-sleeping, non-internal tab in `active_space` lacking an engine
+        // view (`visible_list` + background tabs when `tabs_lazy == false`), setting visibility true
+        // for visible panes and false for non-visible background tabs.
+        let mut tabs_to_reconcile: Vec<TabId> = visible_list;
+        if let Some(model) = self.space_tabs.get(&active_space) {
+            for t in model.tabs() {
+                if !new_visible_set.contains(&t.id)
+                    && !t.sleeping
+                    && !t.url.is_internal()
+                    && t.engine_tab_id.is_none()
+                {
+                    tabs_to_reconcile.push(t.id);
+                }
+            }
+        }
+
+        for tab_id in tabs_to_reconcile {
+            let Some(entry_snap) = self
+                .space_tabs
+                .get(&active_space)
+                .and_then(|model| model.tab(tab_id).cloned())
+            else {
                 continue;
             };
             if entry_snap.url.is_internal() {
                 continue;
             }
-            let rt = self.runtimes.get(&tab_id);
-            let zoom_pct = rt.map_or(self.settings.page_zoom, |r| r.zoom_percent);
+            let is_visible = new_visible_set.contains(&tab_id);
+            let zoom_pct = self
+                .runtimes
+                .get(&tab_id)
+                .map_or(self.settings.page_zoom, |r| r.zoom_percent);
 
-            if entry_snap.engine_tab_id.is_none() {
+            if entry_snap.engine_tab_id.is_none()
+                && !pending_engine_create_in_batch(directives, tab_id)
+            {
                 if let Some(rt_mut) = self.runtimes.get_mut(&tab_id) {
                     rt_mut.engine_can_go_back = false;
                     rt_mut.engine_can_go_forward = false;
@@ -5920,7 +6144,7 @@ impl BrowserController {
             }
             directives.push(EngineDirective::SetVisible {
                 tab: tab_id,
-                visible: true,
+                visible: is_visible,
             });
         }
 
@@ -6400,6 +6624,19 @@ impl BrowserController {
 
         self.settings.save_to(&self.store)?;
         self.compositor.history.save_to(&self.store, None)?;
+        let own_store_spaces: Vec<SpaceId> = self
+            .spaces
+            .spaces()
+            .iter()
+            .filter(|s| s.uses_own_history_file())
+            .map(|s| s.id)
+            .collect();
+        for sid in own_store_spaces {
+            if let Some(hist) = self.isolated_histories.get_mut(&sid) {
+                let suffix = format!("space-{sid}");
+                hist.save_to(&self.store, Some(&suffix))?;
+            }
+        }
         for (&pid, bmgr) in &self.bookmarks {
             let suffix = if self
                 .spaces
@@ -6428,6 +6665,18 @@ impl BrowserController {
 // ============================================================================
 // Pure utility helpers
 // ============================================================================
+
+fn pending_engine_create_in_batch(directives: &[EngineDirective], tab_id: TabId) -> bool {
+    let mut created = false;
+    for d in directives {
+        match d {
+            EngineDirective::CreateTab { tab, .. } if *tab == tab_id => created = true,
+            EngineDirective::CloseTab { tab, .. } if *tab == tab_id => created = false,
+            _ => {}
+        }
+    }
+    created
+}
 
 fn apply_settings_to_tab_model(settings: &Settings, model: &mut TabModel) {
     model.set_layout(settings.tab_layout);

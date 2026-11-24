@@ -1,15 +1,18 @@
 use searlx_core::address::{ParseOptions, SearchEngine, SubmitDisposition, SuggestionRow};
 use searlx_core::controller::EngineEvent as CtrlEvent;
-use searlx_core::data::{DataStore, SessionFile, SessionTab, Split};
+use searlx_core::data::{
+    ArchivedTab, DataStore, SearchSitesFile, SessionFile, SessionTab, SiteSearchRecord, Split,
+};
 use searlx_core::domain::{CURRENT_SCHEMA_VERSION, PermissionDecision, PermissionKind, SpaceColor};
 use searlx_core::history::ClearHistoryScope;
 use searlx_core::menus_and_pages::{ConnectionState, InternalPageKind};
+use searlx_core::peek_small_float::FloatTrigger;
 use searlx_core::reader::ReaderTheme;
 use searlx_core::session::RestoreMode;
 use searlx_core::spaces_profiles::SpaceStorePolicy;
 use searlx_core::{
-    AppCommand, EngineDirective, EnginePermissionKind, HttpMethod, InternalPageData, PageUrl,
-    ScriptWorld, Settings, SettingsPage,
+    AppCommand, DragPayload, DropTarget, EngineDirective, EnginePermissionKind, HttpMethod,
+    InternalPageData, PageUrl, ScriptWorld, Settings, SettingsPage, SplitDropSide,
 };
 use searlx_engine::fake::FakeCall;
 use searlx_engine::{Capabilities, FakeEngine, ScriptWorld as RawScriptWorld};
@@ -1112,4 +1115,459 @@ fn password_vault_origin_check_save_session_roundtrip_and_lifecycle_sleep() {
             .before_first_paint_css("evil.example", false)
             .is_some_and(|c| c.contains(".annoyance"))
     );
+}
+
+#[test]
+fn own_store_history_isolation_and_clear_history_scope_guarantees() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let store = DataStore::new(tmp.path());
+    store
+        .save_search_sites(&SearchSitesFile {
+            sites: vec![SiteSearchRecord {
+                host: "crates.io".into(),
+                name: "Crates".into(),
+                keyword: Some("cr".into()),
+                template: "https://crates.io/search?q=%s".into(),
+                ..SiteSearchRecord::default()
+            }],
+            ..SearchSitesFile::default()
+        })
+        .expect("save search sites");
+
+    store
+        .save_archive(
+            None,
+            &searlx_core::data::ArchiveFile {
+                tabs: vec![ArchivedTab {
+                    id: "arch-1".into(),
+                    url: "https://old.example/".into(),
+                    title: "Old".into(),
+                    closed_at: "2026-11-01T00:00:00Z".into(),
+                    ..ArchivedTab::default()
+                }],
+                ..searlx_core::data::ArchiveFile::default()
+            },
+        )
+        .expect("save archive");
+
+    let mut driver = ControllerDriver::open(
+        tmp.path(),
+        FakeEngine::new(full_capabilities()),
+        RestoreMode::Normal,
+    )
+    .expect("open");
+
+    // 1. Personal visit + completed download.
+    let t0 = driver.snapshot().active_tab.expect("t0");
+    driver
+        .dispatch(AppCommand::NavigateTab {
+            tab: t0,
+            url: PageUrl::parse("https://personal.example/news").expect("personal url"),
+        })
+        .expect("nav personal");
+    driver
+        .push_core_event(CtrlEvent::DownloadRequested {
+            tab: t0,
+            url: PageUrl::parse("https://cdn.example/installer.dmg").expect("dl url"),
+            method: HttpMethod::Get,
+            has_request_body: false,
+            suggested_name: Some("installer.dmg".into()),
+            total_bytes: Some(1024),
+        })
+        .expect("dl start");
+    let dl_id = driver.snapshot().downloads.entries[0].id.clone();
+    driver
+        .push_core_event(CtrlEvent::DownloadProgress {
+            download_id: dl_id,
+            bytes_received: 1024,
+        })
+        .expect("dl finish");
+
+    // 2. Create an OwnStore space: initially empty history (never falls back to Personal history!).
+    driver
+        .dispatch(AppCommand::CreateSpace {
+            profile: None,
+            name: "Signed Out Work".into(),
+            color: SpaceColor::Blue,
+            icon: "briefcase".into(),
+            store_policy: SpaceStorePolicy::OwnStore,
+        })
+        .expect("create own store space");
+    let iso_space = driver
+        .snapshot()
+        .spaces
+        .into_iter()
+        .find(|s| s.name == "Signed Out Work")
+        .expect("iso space")
+        .id;
+    assert!(
+        driver
+            .controller
+            .history_for_space(iso_space)
+            .visits()
+            .is_empty(),
+        "empty OwnStore space must never expose Personal history"
+    );
+
+    driver
+        .dispatch(AppCommand::SwitchSpace { space: iso_space })
+        .expect("switch iso");
+    let iso_tab = driver.snapshot().active_tab.expect("iso tab");
+    driver
+        .dispatch(AppCommand::NavigateTab {
+            tab: iso_tab,
+            url: PageUrl::parse("https://isolated-work.example/portal").expect("iso url"),
+        })
+        .expect("nav iso");
+    driver
+        .push_core_event(CtrlEvent::TitleChanged {
+            tab: iso_tab,
+            title: "Work Portal Title".into(),
+        })
+        .expect("title changed");
+
+    // OwnStore navigation and TitleChanged must NEVER leak into shared compositor history!
+    assert_eq!(driver.controller.compositor().history.visits().len(), 1);
+    assert_eq!(
+        driver.controller.compositor().history.visits()[0]
+            .url
+            .as_str(),
+        "https://personal.example/news"
+    );
+    let iso_visits = driver.controller.history_for_space(iso_space).visits();
+    assert_eq!(iso_visits.len(), 1);
+    assert_eq!(
+        iso_visits[0].url.as_str(),
+        "https://isolated-work.example/portal"
+    );
+    assert_eq!(iso_visits[0].title, "Work Portal Title");
+
+    // SaveSession persists isolated history to history-space-<id>.json.
+    driver
+        .dispatch(AppCommand::SaveSession)
+        .expect("save session");
+    let space_suffix = format!("space-{iso_space}");
+    let disk_iso_hist = store
+        .load_history(Some(&space_suffix))
+        .expect("load isolated space history");
+    assert_eq!(disk_iso_hist.visits.len(), 1);
+    assert_eq!(
+        disk_iso_hist.visits[0].url,
+        "https://isolated-work.example/portal"
+    );
+
+    // 3. ClearHistory(SignedOutSpace(iso_space)) wipes ONLY isolated space history & file,
+    // leaving shared Personal history, downloads source_url, and search-sites.json intact!
+    driver
+        .dispatch(AppCommand::ClearHistory {
+            scope: ClearHistoryScope::SignedOutSpace(iso_space.to_string()),
+        })
+        .expect("clear signed out space");
+    assert!(
+        driver
+            .controller
+            .history_for_space(iso_space)
+            .visits()
+            .is_empty()
+    );
+    assert!(
+        store
+            .load_history(Some(&space_suffix))
+            .expect("reloaded isolated history")
+            .visits
+            .is_empty()
+    );
+    assert_eq!(driver.controller.compositor().history.visits().len(), 1);
+    assert_eq!(
+        driver.controller.downloads().listed_entries()[0]
+            .source_url
+            .as_ref()
+            .map(|u| u.as_str()),
+        Some("https://cdn.example/installer.dmg")
+    );
+    assert_eq!(
+        store.load_downloads().expect("disk downloads").downloads[0]
+            .source_url
+            .as_deref(),
+        Some("https://cdn.example/installer.dmg")
+    );
+    assert_eq!(store.load_search_sites().expect("sites").sites.len(), 1);
+    assert_eq!(store.load_archive(None).expect("archive").tabs.len(), 1);
+
+    // 4. ClearHistory(All) strips BOTH in-memory and disk download source_urls and shared artifacts,
+    // and SaveSession keeps source_url stripped on disk.
+    driver
+        .dispatch(AppCommand::ClearHistory {
+            scope: ClearHistoryScope::All,
+        })
+        .expect("clear all");
+    assert!(driver.controller.compositor().history.visits().is_empty());
+    assert_eq!(driver.controller.downloads().listed_entries().len(), 1);
+    assert!(
+        driver.controller.downloads().listed_entries()[0]
+            .source_url
+            .is_none(),
+        "ClearHistory(All) must clear in-memory download source_url for search://downloads"
+    );
+    driver
+        .dispatch(AppCommand::SaveSession)
+        .expect("save after clear");
+    let post_downloads = store.load_downloads().expect("downloads after clear+save");
+    assert_eq!(post_downloads.downloads.len(), 1);
+    assert!(post_downloads.downloads[0].source_url.is_none());
+    assert!(
+        store
+            .load_search_sites()
+            .expect("cleared sites")
+            .sites
+            .is_empty()
+    );
+}
+
+#[test]
+fn split_drag_order_reopen_closed_group_non_lazy_background_and_cross_space_leave_tab() {
+    let tmp = tempfile::tempdir().expect("temp");
+    let mut driver = ControllerDriver::open(
+        tmp.path(),
+        FakeEngine::new(full_capabilities()),
+        RestoreMode::Normal,
+    )
+    .expect("open");
+
+    // 1. Default Settings (tabs_lazy == false) materializes non-internal background tabs immediately.
+    assert!(!driver.controller.settings().tabs_lazy);
+    let active_t0 = driver.snapshot().active_tab.expect("t0");
+    driver
+        .dispatch(AppCommand::NavigateTab {
+            tab: active_t0,
+            url: PageUrl::parse("https://center.example/").expect("center"),
+        })
+        .expect("nav t0");
+    driver
+        .dispatch(AppCommand::NewTab {
+            url: Some(PageUrl::parse("https://left.example/").expect("left")),
+            activate: false,
+        })
+        .expect("open bg left");
+    let bg_left = driver.snapshot().tabs[1].id;
+    let bg_left_snap = driver
+        .snapshot()
+        .tabs
+        .into_iter()
+        .find(|t| t.id == bg_left)
+        .expect("bg_left snap");
+    assert!(!bg_left_snap.sleeping);
+    let bg_eid = bg_left_snap
+        .engine_tab_id
+        .expect("non-lazy background tab must materialize immediately");
+    assert!(!driver.engine.tab(bg_eid).expect("fake tab").visible);
+    assert_eq!(driver.snapshot().active_tab, Some(active_t0));
+
+    // When tabs_lazy == true, background tab stays sleeping without engine view.
+    let lazy_settings = Settings {
+        tabs_lazy: true,
+        float_leave: true,
+        ..Settings::default()
+    };
+    driver
+        .dispatch(AppCommand::UpdateSettings {
+            settings: Box::new(lazy_settings),
+        })
+        .expect("enable lazy + float_leave");
+    driver
+        .dispatch(AppCommand::NewTab {
+            url: Some(PageUrl::parse("https://right.example/").expect("right")),
+            activate: false,
+        })
+        .expect("open lazy bg right");
+    let bg_right_snap = driver
+        .snapshot()
+        .tabs
+        .into_iter()
+        .find(|t| t.url.as_str() == "https://right.example/")
+        .expect("bg_right snap");
+    let bg_right = bg_right_snap.id;
+    assert!(bg_right_snap.sleeping);
+    assert_eq!(bg_right_snap.engine_tab_id, None);
+
+    // 2. Drag non-active bg_left onto active_t0's Left edge -> split panes [bg_left, active_t0]!
+    driver
+        .dispatch(AppCommand::BeginDrag {
+            payload: DragPayload::Tab(bg_left),
+            x: 10.0,
+            y: 10.0,
+        })
+        .expect("begin drag left");
+    driver
+        .dispatch(AppCommand::UpdateDrag {
+            x: 100.0,
+            y: 100.0,
+            target: Some(DropTarget::PageSplitEdge {
+                target_tab: active_t0,
+                side: SplitDropSide::Left,
+            }),
+        })
+        .expect("update drag left");
+    driver
+        .dispatch(AppCommand::CommitDrag)
+        .expect("commit drag left");
+    let split_after_left: Vec<_> = driver
+        .snapshot()
+        .split_panes
+        .iter()
+        .map(|p| p.tab)
+        .collect();
+    assert_eq!(split_after_left, vec![bg_left, active_t0]);
+
+    // Drag sleeping non-active bg_right onto active_t0's Right edge -> wakes bg_right into [bg_left, active_t0, bg_right]!
+    driver
+        .dispatch(AppCommand::BeginDrag {
+            payload: DragPayload::Tab(bg_right),
+            x: 10.0,
+            y: 20.0,
+        })
+        .expect("begin drag right");
+    driver
+        .dispatch(AppCommand::UpdateDrag {
+            x: 900.0,
+            y: 100.0,
+            target: Some(DropTarget::PageSplitEdge {
+                target_tab: active_t0,
+                side: SplitDropSide::Right,
+            }),
+        })
+        .expect("update drag right");
+    driver
+        .dispatch(AppCommand::CommitDrag)
+        .expect("commit drag right");
+    let split_after_right: Vec<_> = driver
+        .snapshot()
+        .split_panes
+        .iter()
+        .map(|p| p.tab)
+        .collect();
+    assert_eq!(split_after_right, vec![bg_left, active_t0, bg_right]);
+    assert!(
+        driver
+            .snapshot()
+            .tabs
+            .iter()
+            .find(|t| t.id == bg_right)
+            .expect("bg_right woke")
+            .engine_tab_id
+            .is_some()
+    );
+
+    // 3. Create group, navigate so history builds, CloseGroup, then ReopenClosedGroup restores real tabs + history.
+    driver
+        .dispatch(AppCommand::NewTab {
+            url: Some(PageUrl::parse("https://grp-a.example/step1").expect("ga1")),
+            activate: true,
+        })
+        .expect("new ga1");
+    let ga = driver.snapshot().active_tab.expect("ga");
+    driver
+        .dispatch(AppCommand::NavigateTab {
+            tab: ga,
+            url: PageUrl::parse("https://grp-a.example/step2").expect("ga2"),
+        })
+        .expect("nav ga2");
+    driver
+        .dispatch(AppCommand::NewTab {
+            url: Some(PageUrl::parse("https://grp-b.example/").expect("gb")),
+            activate: true,
+        })
+        .expect("new gb");
+    let gb = driver.snapshot().active_tab.expect("gb");
+    driver
+        .dispatch(AppCommand::CreateTabGroup {
+            name: "Research".into(),
+            color: SpaceColor::Violet,
+            tabs: vec![ga, gb],
+        })
+        .expect("create group");
+    let gid = driver.snapshot().groups[0].id;
+    let count_before_close = driver.snapshot().tabs.len();
+    driver
+        .dispatch(AppCommand::CloseGroup { group: gid })
+        .expect("close group");
+    assert!(driver.snapshot().groups.is_empty());
+    assert_eq!(driver.snapshot().tabs.len(), count_before_close - 2);
+
+    driver
+        .dispatch(AppCommand::ReopenClosedGroup)
+        .expect("reopen group");
+    let after_reopen = driver.snapshot();
+    assert_eq!(after_reopen.groups.len(), 1);
+    let reopened_group = &after_reopen.groups[0];
+    assert_eq!(reopened_group.name, "Research");
+    assert_eq!(reopened_group.tabs.len(), 2);
+    for &live_tid in &reopened_group.tabs {
+        assert!(
+            after_reopen
+                .tabs
+                .iter()
+                .any(|t| t.id == live_tid && t.group == Some(reopened_group.id)),
+            "group must reference recreated live TabId"
+        );
+    }
+    let first_reopened = after_reopen
+        .tabs
+        .iter()
+        .find(|t| t.id == reopened_group.tabs[0])
+        .expect("first reopened");
+    assert_eq!(first_reopened.url.as_str(), "https://grp-a.example/step2");
+    assert!(first_reopened.can_go_back);
+
+    // 4. Cross-space ActivateTab with playing video triggers LeaveTab floating video on outgoing space's tab.
+    let space_a = after_reopen.active_space;
+    driver
+        .dispatch(AppCommand::CreateSpace {
+            profile: None,
+            name: "Space B".into(),
+            color: SpaceColor::Green,
+            icon: "sparkles".into(),
+            store_policy: SpaceStorePolicy::SharedWithFirst,
+        })
+        .expect("create space b");
+    let space_b = driver
+        .snapshot()
+        .spaces
+        .into_iter()
+        .find(|s| s.name == "Space B")
+        .expect("space b")
+        .id;
+    driver
+        .dispatch(AppCommand::SwitchSpace { space: space_b })
+        .expect("switch space b");
+    let tab_in_b = driver.snapshot().active_tab.expect("tab in b");
+    driver
+        .dispatch(AppCommand::NavigateTab {
+            tab: tab_in_b,
+            url: PageUrl::parse("https://notes.example/").expect("notes"),
+        })
+        .expect("nav notes");
+
+    // Switch back to Space A, start media on its active tab, then ActivateTab into Space B!
+    driver
+        .dispatch(AppCommand::SwitchSpace { space: space_a })
+        .expect("back to space a");
+    let video_tab_a = driver.snapshot().active_tab.expect("video tab a");
+    driver
+        .push_core_event(CtrlEvent::MediaStateChanged {
+            tab: video_tab_a,
+            audible: true,
+            muted: false,
+        })
+        .expect("media playing");
+    driver
+        .dispatch(AppCommand::ActivateTab { tab: tab_in_b })
+        .expect("cross-space activate");
+    let float = driver
+        .snapshot()
+        .floating_video
+        .expect("cross-space leave must start floating video");
+    assert_eq!(float.tab_id, video_tab_a);
+    assert_eq!(float.space_id, space_a);
+    assert_eq!(float.trigger, FloatTrigger::LeaveTab);
 }

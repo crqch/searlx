@@ -340,24 +340,25 @@ impl HistoryManager {
         store: Option<&DataStore>,
     ) -> Result<ClearHistoryOutcome> {
         let before = self.visits.len();
-        match scope {
+        let clear_all = match scope {
             ClearHistoryScope::All => {
                 self.visits.clear();
+                self.archive.clear();
+                self.recently_closed.clear();
+                self.link_chooser_sites.clear();
+                self.cached_favicons.clear();
+                self.learned_site_searches.clear();
+                true
             }
             ClearHistoryScope::SignedOutSpace(space_id) => {
                 self.visits
                     .retain(|v| v.space.as_deref() != Some(space_id.as_str()));
+                false
             }
-        }
+        };
         let visits_removed = before - self.visits.len();
 
-        self.archive.clear();
-        self.recently_closed.clear();
-        self.link_chooser_sites.clear();
-        self.cached_favicons.clear();
-        self.learned_site_searches.clear();
-
-        if let Some(store) = store {
+        if clear_all && let Some(store) = store {
             // Strip download source addresses but leave rows (`FEATURES.md` §10, §11).
             let mut downloads = store
                 .read_or_default::<crate::data::DownloadsFile>("downloads.json")?
@@ -372,11 +373,11 @@ impl HistoryManager {
 
         Ok(ClearHistoryOutcome {
             visits_removed,
-            archive_cleared: true,
-            link_chooser_cleared: true,
-            favicons_cleared: true,
-            learned_site_searches_cleared: true,
-            download_sources_stripped: true,
+            archive_cleared: clear_all,
+            link_chooser_cleared: clear_all,
+            favicons_cleared: clear_all,
+            learned_site_searches_cleared: clear_all,
+            download_sources_stripped: clear_all,
         })
     }
 }

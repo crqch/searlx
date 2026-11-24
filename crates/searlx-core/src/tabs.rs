@@ -834,6 +834,11 @@ impl TabModel {
 
     /// Commit the active drag session and apply its drop operation (`FEATURES.md` §3.3).
     pub fn commit_drag(&mut self) -> Result<Option<DropTarget>> {
+        Ok(self.commit_drag_with_payload()?.map(|(_, target)| target))
+    }
+
+    /// Commit the active drag session, returning both its [`DragPayload`] and [`DropTarget`].
+    pub fn commit_drag_with_payload(&mut self) -> Result<Option<(DragPayload, DropTarget)>> {
         let Some(session) = self.drag.take() else {
             return Ok(None);
         };
@@ -843,8 +848,9 @@ impl TabModel {
         let Some(target) = session.target else {
             return Ok(None);
         };
+        let payload = session.payload;
 
-        if let DragPayload::Tab(tab_id) = session.payload {
+        if let DragPayload::Tab(tab_id) = payload {
             match &target {
                 DropTarget::PinSlot(slot) => {
                     if !self.tab(tab_id).is_some_and(|t| t.pinned) {
@@ -878,7 +884,7 @@ impl TabModel {
                 | DropTarget::DetachWindow => {}
             }
         }
-        Ok(Some(target))
+        Ok(Some((payload, target)))
     }
 
     /// Move `id` to `target_index` within its section (pins or loose tabs).

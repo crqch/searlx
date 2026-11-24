@@ -349,8 +349,10 @@ impl StoreCompositor {
         if !self.allows_durable_writes(tab) {
             return;
         }
-        self.history
-            .record_visit(url.clone(), title, timestamp_iso, false, space);
+        if !isolated_space {
+            self.history
+                .record_visit(url.clone(), title, timestamp_iso, false, space);
+        }
         if matches!(url.scheme(), "http" | "https") {
             if !isolated_space {
                 self.handoff_url = Some(url.clone());
@@ -458,6 +460,19 @@ mod tests {
         let norm_tab = TabId::new(11);
         comp.register_tab(priv_tab, true, false);
         comp.register_tab(norm_tab, false, false);
+        let isolated_tab = TabId::new(12);
+        comp.register_tab(isolated_tab, false, false);
+        comp.on_navigation_committed_with_policy(
+            isolated_tab,
+            PageUrl::parse("https://work-isolated.example/doc").expect("iso url"),
+            "Isolated Work Doc",
+            "2026-11-21T09:49:00Z",
+            Some("space-own".into()),
+            true,
+            false,
+        );
+        assert!(comp.history.visits().is_empty());
+        assert!(comp.handoff_url.is_none());
 
         let secret_url = PageUrl::parse("https://bank.example.com/account").expect("url");
         let icon_url = PageUrl::parse("https://bank.example.com/favicon.ico").expect("icon");

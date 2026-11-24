@@ -140,6 +140,19 @@ impl TabGroupsManager {
         Some(closed)
     }
 
+    /// Replace member tab IDs for `group_id` (or remove the group if `tabs` is empty).
+    pub fn replace_group_tabs(&mut self, group_id: GroupId, tabs: Vec<TabId>) -> bool {
+        let Some(pos) = self.groups.iter().position(|(_, g)| g.id == group_id) else {
+            return false;
+        };
+        if tabs.is_empty() {
+            self.groups.remove(pos);
+        } else {
+            self.groups[pos].1.tabs = tabs;
+        }
+        true
+    }
+
     /// Derive a positive non-zero 31-bit integer ID for Chrome's `tabGroups` extension API (`FEATURES.md` §8).
     #[must_use]
     pub fn extension_group_number(group_id: GroupId) -> i32 {

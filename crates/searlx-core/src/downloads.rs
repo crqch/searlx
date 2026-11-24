@@ -369,6 +369,13 @@ impl DownloadsManager {
         self.entries.iter().filter(|e| !e.private).collect()
     }
 
+    /// Strip `source_url` from all in-memory download rows while leaving rows intact (`FEATURES.md` §10, §11).
+    pub fn strip_source_urls(&mut self) {
+        for entry in &mut self.entries {
+            entry.source_url = None;
+        }
+    }
+
     /// Count of currently active (in-progress or paused) downloads, including private tabs.
     #[must_use]
     pub fn active_count(&self) -> usize {
