@@ -1,20 +1,25 @@
 //! WebView2 backend (Windows) — `P0-04`, `P1-05`.
 //!
-//! Provides the `Engine` contract implementation for Windows (`WebView2Engine`)
-//! with per-(profile, space) user data folder resolution and ephemeral InPrivate
-//! store isolation. Physical Windows 11 WebView2 child-window overlay verification
-//! requires a Windows host (`TODO.md` P0-04, P1-05).
+//! Provides the `Engine` capability descriptor, per-(profile, space) user data
+//! folder resolution, and non-native unsupported handling for Windows
+//! (`WebView2Engine`). Physical Windows 11 WebView2 child-window overlay
+//! verification requires a Windows host (`TODO.md` P0-04, P1-05).
 
 use std::path::{Path, PathBuf};
 
 use searlx_core::{PageUrl, ProfileId, SpaceId, TabId};
 use searlx_engine::{
-    Capabilities, DataKinds, DataStoreHandle, Engine, EngineEvent, EngineResult, FakeEngine,
+    Capabilities, DataKinds, DataStoreHandle, Engine, EngineError, EngineEvent, EngineResult,
     FindOptions, FindState, Image, InjectAt, Rect, ScriptWorld, TabOptions,
 };
 
 /// The backend's name.
 pub const ENGINE_NAME: &str = "webview2";
+
+#[cfg(not(target_os = "windows"))]
+const UNSUPPORTED_MSG: &str = "WebView2 is only supported on Windows";
+#[cfg(target_os = "windows")]
+const UNSUPPORTED_MSG: &str = "WebView2 native windows-rs backend is not yet wired on this build";
 
 /// Capabilities supported by Windows `WebView2` (`docs/spike/capabilities.md`).
 #[must_use]
@@ -52,118 +57,123 @@ pub fn webview2_user_data_folder(
     }
 }
 
-/// Windows `WebView2` engine implementation behind `searlx_engine::Engine` (`P1-05`).
-#[derive(Debug)]
+/// Windows `WebView2` engine handle behind `searlx_engine::Engine` (`P1-05`).
+///
+/// On non-Windows hosts (and until native `windows-rs` WebView2 bindings are
+/// wired on Windows), every engine operation honestly returns
+/// [`EngineError::NotSupported`] rather than delegating to a fake engine
+/// (`AGENTS.md` §2.4).
+#[derive(Debug, Default)]
 pub struct WebView2Engine {
-    inner: FakeEngine,
-}
-
-impl Default for WebView2Engine {
-    fn default() -> Self {
-        Self::new()
-    }
+    _private: (),
 }
 
 impl WebView2Engine {
-    /// Create a new `WebView2Engine`.
+    /// Construct a `WebView2Engine` handle.
     #[must_use]
-    pub fn new() -> Self {
-        Self {
-            inner: FakeEngine::new(target_capabilities()),
-        }
+    pub const fn new() -> Self {
+        Self { _private: () }
+    }
+
+    /// Attempt to initialize a live native `WebView2` engine.
+    ///
+    /// Returns [`EngineError::NotSupported`] on non-Windows platforms or when
+    /// the native `windows-rs` WebView2 backend is unavailable.
+    pub fn try_new() -> EngineResult<Self> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 }
 
 impl Engine for WebView2Engine {
-    fn create_tab(&mut self, options: TabOptions) -> EngineResult<TabId> {
-        self.inner.create_tab(options)
+    fn create_tab(&mut self, _options: TabOptions) -> EngineResult<TabId> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn close_tab(&mut self, id: TabId) -> EngineResult<()> {
-        self.inner.close_tab(id)
+    fn close_tab(&mut self, _id: TabId) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn navigate(&mut self, id: TabId, url: PageUrl) -> EngineResult<()> {
-        self.inner.navigate(id, url)
+    fn navigate(&mut self, _id: TabId, _url: PageUrl) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn back(&mut self, id: TabId) -> EngineResult<()> {
-        self.inner.back(id)
+    fn back(&mut self, _id: TabId) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn forward(&mut self, id: TabId) -> EngineResult<()> {
-        self.inner.forward(id)
+    fn forward(&mut self, _id: TabId) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn reload(&mut self, id: TabId, from_origin: bool) -> EngineResult<()> {
-        self.inner.reload(id, from_origin)
+    fn reload(&mut self, _id: TabId, _from_origin: bool) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn stop(&mut self, id: TabId) -> EngineResult<()> {
-        self.inner.stop(id)
+    fn stop(&mut self, _id: TabId) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn eval(&mut self, id: TabId, world: ScriptWorld, js: &str) -> EngineResult<()> {
-        self.inner.eval(id, world, js)
+    fn eval(&mut self, _id: TabId, _world: ScriptWorld, _js: &str) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
     fn inject(
         &mut self,
-        id: TabId,
-        world: ScriptWorld,
-        at: InjectAt,
-        js: &str,
+        _id: TabId,
+        _world: ScriptWorld,
+        _at: InjectAt,
+        _js: &str,
     ) -> EngineResult<()> {
-        self.inner.inject(id, world, at, js)
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn set_bounds(&mut self, id: TabId, rect: Rect) -> EngineResult<()> {
-        self.inner.set_bounds(id, rect)
+    fn set_bounds(&mut self, _id: TabId, _rect: Rect) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn set_visible(&mut self, id: TabId, visible: bool) -> EngineResult<()> {
-        self.inner.set_visible(id, visible)
+    fn set_visible(&mut self, _id: TabId, _visible: bool) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn focus(&mut self, id: TabId) -> EngineResult<()> {
-        self.inner.focus(id)
+    fn focus(&mut self, _id: TabId) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn snapshot(&mut self, id: TabId) -> EngineResult<Image> {
-        self.inner.snapshot(id)
+    fn snapshot(&mut self, _id: TabId) -> EngineResult<Image> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn find(&mut self, id: TabId, query: &str, options: FindOptions) -> EngineResult<FindState> {
-        self.inner.find(id, query, options)
+    fn find(&mut self, _id: TabId, _query: &str, _options: FindOptions) -> EngineResult<FindState> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn set_zoom(&mut self, id: TabId, zoom: f64) -> EngineResult<()> {
-        self.inner.set_zoom(id, zoom)
+    fn set_zoom(&mut self, _id: TabId, _zoom: f64) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn set_muted(&mut self, id: TabId, muted: bool) -> EngineResult<()> {
-        self.inner.set_muted(id, muted)
+    fn set_muted(&mut self, _id: TabId, _muted: bool) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
     fn data_store(
         &mut self,
-        space: SpaceId,
-        profile: ProfileId,
-        private: bool,
+        _space: SpaceId,
+        _profile: ProfileId,
+        _private: bool,
     ) -> EngineResult<DataStoreHandle> {
-        self.inner.data_store(space, profile, private)
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
-    fn clear_data(&mut self, store: DataStoreHandle, kinds: DataKinds) -> EngineResult<()> {
-        self.inner.clear_data(store, kinds)
+    fn clear_data(&mut self, _store: DataStoreHandle, _kinds: DataKinds) -> EngineResult<()> {
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 
     fn capabilities(&self) -> Capabilities {
-        self.inner.capabilities()
+        target_capabilities()
     }
 
     fn pump(&mut self) -> EngineResult<Vec<EngineEvent>> {
-        self.inner.pump()
+        Err(EngineError::NotSupported(UNSUPPORTED_MSG))
     }
 }
 
@@ -172,42 +182,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn webview2_engine_switches_tabs_without_reload_and_uses_ephemeral_private_store() {
-        let mut engine = WebView2Engine::new();
+    fn target_capabilities_and_user_data_folder_isolation_are_accurate() {
+        let caps = target_capabilities();
+        assert_eq!(caps.engine, ENGINE_NAME);
+        assert!(caps.passkeys);
+        assert!(!caps.content_blockers);
+        assert!(caps.native_pip);
+        assert!(caps.custom_user_agent);
+        assert!(caps.print);
+        assert!(caps.pdf);
+        assert!(caps.downloads_pause);
+        assert!(caps.cookie_import);
+        assert!(!caps.extensions);
+        assert!(!caps.wayland_overlay);
+
         let space = SpaceId::new();
         let profile = ProfileId::new();
         assert!(webview2_user_data_folder(Path::new("C:/AppData"), profile, space, true).is_none());
-        assert!(
-            webview2_user_data_folder(Path::new("C:/AppData"), profile, space, false).is_some()
-        );
+        let persistent = webview2_user_data_folder(Path::new("C:/AppData"), profile, space, false)
+            .expect("persistent path");
+        let expected_suffix =
+            PathBuf::from(format!("profile-{profile}")).join(format!("space-{space}"));
+        assert!(persistent.ends_with(expected_suffix));
+    }
 
-        let t1 = engine
-            .create_tab(TabOptions {
-                url: Some(PageUrl::parse("https://example.com/one").expect("url")),
-                space,
-                profile,
-                private: false,
-                ..TabOptions::default()
-            })
-            .expect("t1");
-        let t2 = engine
-            .create_tab(TabOptions {
-                url: Some(PageUrl::parse("https://example.com/two").expect("url")),
-                space,
-                profile,
-                private: true,
-                ..TabOptions::default()
-            })
-            .expect("t2");
-        let _ = engine.pump().expect("initial load events");
+    #[test]
+    fn webview2_engine_honestly_reports_unsupported_without_native_binding() {
+        assert!(matches!(
+            WebView2Engine::try_new(),
+            Err(EngineError::NotSupported(_))
+        ));
 
-        // Switching visibility between t1 and t2 emits zero reload/navigation events
-        engine.set_visible(t1, false).expect("hide t1");
-        engine.set_visible(t2, true).expect("show t2");
-        engine.focus(t2).expect("focus t2");
-        assert!(engine.pump().expect("switch events").is_empty());
-
-        let private_store = engine.data_store(space, profile, true).expect("store");
-        assert!(private_store.ephemeral);
+        let mut engine = WebView2Engine::new();
+        assert_eq!(engine.capabilities(), target_capabilities());
+        assert!(matches!(
+            engine.create_tab(TabOptions::default()),
+            Err(EngineError::NotSupported(_))
+        ));
+        assert!(matches!(
+            engine.data_store(SpaceId::new(), ProfileId::new(), true),
+            Err(EngineError::NotSupported(_))
+        ));
+        assert!(matches!(engine.pump(), Err(EngineError::NotSupported(_))));
     }
 }
