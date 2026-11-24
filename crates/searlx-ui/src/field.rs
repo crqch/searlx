@@ -21,6 +21,7 @@ actions!(
     [
         Backspace,
         Delete,
+        DeleteWordBackward,
         Left,
         Right,
         SelectLeft,
@@ -32,6 +33,13 @@ actions!(
         Cut,
         Copy,
         Submit,
+        SubmitShift,
+        SubmitBackground,
+        SubmitForeground,
+        MoveUp,
+        MoveDown,
+        TabComplete,
+        ShiftTabComplete,
         Cancel,
     ]
 );
@@ -41,6 +49,7 @@ actions!(
 pub fn key_bindings() -> Vec<KeyBinding> {
     vec![
         KeyBinding::new("backspace", Backspace, Some("AddressField")),
+        KeyBinding::new("alt-backspace", DeleteWordBackward, Some("AddressField")),
         KeyBinding::new("delete", Delete, Some("AddressField")),
         KeyBinding::new("left", Left, Some("AddressField")),
         KeyBinding::new("right", Right, Some("AddressField")),
@@ -57,6 +66,15 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("home", Home, Some("AddressField")),
         KeyBinding::new("end", End, Some("AddressField")),
         KeyBinding::new("enter", Submit, Some("AddressField")),
+        KeyBinding::new("shift-enter", SubmitShift, Some("AddressField")),
+        KeyBinding::new("cmd-enter", SubmitBackground, Some("AddressField")),
+        KeyBinding::new("ctrl-enter", SubmitBackground, Some("AddressField")),
+        KeyBinding::new("cmd-shift-enter", SubmitForeground, Some("AddressField")),
+        KeyBinding::new("ctrl-shift-enter", SubmitForeground, Some("AddressField")),
+        KeyBinding::new("up", MoveUp, Some("AddressField")),
+        KeyBinding::new("down", MoveDown, Some("AddressField")),
+        KeyBinding::new("tab", TabComplete, Some("AddressField")),
+        KeyBinding::new("shift-tab", ShiftTabComplete, Some("AddressField")),
         KeyBinding::new("escape", Cancel, Some("AddressField")),
     ]
 }
@@ -66,10 +84,28 @@ pub fn key_bindings() -> Vec<KeyBinding> {
 pub enum FieldEvent {
     /// Return was pressed with the current text.
     Submitted(String),
+    /// Return was pressed with modifier keys (`⌘Return`, `⇧⌘Return`, `⇧Return`).
+    SubmittedWith {
+        /// Current typed text.
+        text: String,
+        /// Whether `Cmd`/`Ctrl` was held.
+        command: bool,
+        /// Whether `Shift` was held.
+        shift: bool,
+    },
     /// Escape was pressed.
     Cancelled,
     /// The text changed.
     Changed(String),
+    /// Backspace was pressed when the field was already empty (clears site-search chip).
+    BackspaceOnEmpty,
+    /// Arrow up/down inside the field to walk suggestions.
+    SuggestionStep(isize),
+    /// Tab or Shift-Tab pressed inside the field (walks suggestions or locks site chip).
+    TabPressed {
+        /// True for `Shift+Tab`.
+        shift: bool,
+    },
 }
 
 /// The address/search field.
@@ -77,6 +113,7 @@ pub struct AddressField {
     focus_handle: FocusHandle,
     content: SharedString,
     placeholder: SharedString,
+    inline_completion: Option<SharedString>,
     selected_range: Range<usize>,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
@@ -92,6 +129,7 @@ impl std::fmt::Debug for AddressField {
         f.debug_struct("AddressField")
             .field("length", &self.content.len())
             .field("marked", &self.marked_range.is_some())
+            .field("has_completion", &self.inline_completion.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -103,6 +141,7 @@ impl AddressField {
             focus_handle: cx.focus_handle(),
             content: SharedString::default(),
             placeholder: "Search or enter address".into(),
+            inline_completion: None,
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
@@ -118,6 +157,33 @@ impl AddressField {
     pub fn set_palette(&mut self, palette: Palette) {
         self.palette = palette;
         self.placeholder_color = palette.muted;
+    }
+
+    /// Update the placeholder text shown when empty.
+    pub fn set_placeholder(
+        &mut self,
+        placeholder: impl Into<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        self.placeholder = placeholder.into();
+        self.last_layout = None;
+        cx.notify();
+    }
+
+    /// Update the grey inline completion suffix (`FEATURES.md` §4.3).
+    pub fn set_inline_completion(&mut self, completion: Option<String>, cx: &mut Context<Self>) {
+        let next = completion.filter(|s| !s.is_empty()).map(SharedString::from);
+        if self.inline_completion != next {
+            self.inline_completion = next;
+            self.last_layout = None;
+            cx.notify();
+        }
+    }
+
+    /// Current grey inline completion suffix, if any.
+    #[must_use]
+    pub fn inline_completion(&self) -> Option<&str> {
+        self.inline_completion.as_deref().map(AsRef::as_ref)
     }
 
     /// The current text.
@@ -181,23 +247,82 @@ impl AddressField {
     }
 
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
+        if self.content.is_empty() && self.selected_range.is_empty() {
+            self.inline_completion = None;
+            cx.emit(FieldEvent::BackspaceOnEmpty);
+            return;
+        }
         if self.selected_range.is_empty() {
             self.select_to(self.previous_boundary(self.cursor_offset()), cx);
         }
+        self.inline_completion = None;
         self.replace_text_in_range(None, "", window, cx);
-        self.emit_changed(cx);
+    }
+
+    fn delete_word_backward(
+        &mut self,
+        _: &DeleteWordBackward,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.inline_completion = None;
+        if self.selected_range.is_empty() {
+            let start = self.previous_word_boundary(self.cursor_offset());
+            self.select_to(start, cx);
+        }
+        self.replace_text_in_range(None, "", window, cx);
     }
 
     fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected_range.is_empty() {
             self.select_to(self.next_boundary(self.selected_range.end), cx);
         }
+        self.inline_completion = None;
         self.replace_text_in_range(None, "", window, cx);
-        self.emit_changed(cx);
     }
 
     fn submit(&mut self, _: &Submit, _: &mut Window, cx: &mut Context<Self>) {
         cx.emit(FieldEvent::Submitted(self.content.to_string()));
+    }
+
+    fn submit_shift(&mut self, _: &SubmitShift, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(FieldEvent::SubmittedWith {
+            text: self.content.to_string(),
+            command: false,
+            shift: true,
+        });
+    }
+
+    fn submit_background(&mut self, _: &SubmitBackground, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(FieldEvent::SubmittedWith {
+            text: self.content.to_string(),
+            command: true,
+            shift: false,
+        });
+    }
+
+    fn submit_foreground(&mut self, _: &SubmitForeground, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(FieldEvent::SubmittedWith {
+            text: self.content.to_string(),
+            command: true,
+            shift: true,
+        });
+    }
+
+    fn move_up(&mut self, _: &MoveUp, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(FieldEvent::SuggestionStep(-1));
+    }
+
+    fn move_down(&mut self, _: &MoveDown, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(FieldEvent::SuggestionStep(1));
+    }
+
+    fn tab_complete(&mut self, _: &TabComplete, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(FieldEvent::TabPressed { shift: false });
+    }
+
+    fn shift_tab_complete(&mut self, _: &ShiftTabComplete, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(FieldEvent::TabPressed { shift: true });
     }
 
     fn cancel(&mut self, _: &Cancel, _: &mut Window, cx: &mut Context<Self>) {
@@ -227,25 +352,25 @@ impl AddressField {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
             let text = text.replace(['\n', '\r'], " ");
             self.replace_text_in_range(None, &text, window, cx);
-            self.emit_changed(cx);
         }
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(
-                self.content[self.selected_range.clone()].to_string(),
-            ));
+        let range = self.clamp_char_range(&self.selected_range);
+        if !range.is_empty()
+            && let Some(slice) = self.content.get(range)
+        {
+            cx.write_to_clipboard(ClipboardItem::new_string(slice.to_owned()));
         }
     }
 
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(
-                self.content[self.selected_range.clone()].to_string(),
-            ));
+        let range = self.clamp_char_range(&self.selected_range);
+        if !range.is_empty()
+            && let Some(slice) = self.content.get(range)
+        {
+            cx.write_to_clipboard(ClipboardItem::new_string(slice.to_owned()));
             self.replace_text_in_range(None, "", window, cx);
-            self.emit_changed(cx);
         }
     }
 
@@ -254,7 +379,8 @@ impl AddressField {
     }
 
     fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
-        self.selected_range = offset..offset;
+        let clamped = self.clamp_char_boundary(offset);
+        self.selected_range = clamped..clamped;
         self.selection_reversed = false;
         cx.notify();
     }
@@ -282,9 +408,11 @@ impl AddressField {
             return self.content.len();
         }
         line.closest_index_for_x(position.x - bounds.left())
+            .min(self.content.len())
     }
 
     fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        let offset = self.clamp_char_boundary(offset);
         if self.selection_reversed {
             self.selected_range.start = offset;
         } else {
@@ -295,6 +423,20 @@ impl AddressField {
             self.selected_range = self.selected_range.end..self.selected_range.start;
         }
         cx.notify();
+    }
+
+    fn clamp_char_boundary(&self, offset: usize) -> usize {
+        let mut idx = offset.min(self.content.len());
+        while idx > 0 && !self.content.is_char_boundary(idx) {
+            idx -= 1;
+        }
+        idx
+    }
+
+    fn clamp_char_range(&self, range: &Range<usize>) -> Range<usize> {
+        let start = self.clamp_char_boundary(range.start);
+        let end = self.clamp_char_boundary(range.end).max(start);
+        start..end
     }
 
     fn offset_from_utf16(&self, offset: usize) -> usize {
@@ -339,6 +481,23 @@ impl AddressField {
             .unwrap_or(0)
     }
 
+    fn previous_word_boundary(&self, offset: usize) -> usize {
+        let prefix = &self.content[..self.clamp_char_boundary(offset)];
+        let trimmed = prefix.trim_end();
+        if trimmed.is_empty() {
+            return 0;
+        }
+        trimmed
+            .rfind(|c: char| c.is_whitespace() || c == '/' || c == '.')
+            .map_or(0, |idx| {
+                let mut pos = idx;
+                if let Some(ch) = trimmed[idx..].chars().next() {
+                    pos += ch.len_utf8();
+                }
+                if pos == trimmed.len() { idx } else { pos }
+            })
+    }
+
     fn next_boundary(&self, offset: usize) -> usize {
         self.content
             .grapheme_indices(true)
@@ -355,9 +514,9 @@ impl EntityInputHandler for AddressField {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
-        let range = self.range_from_utf16(&range_utf16);
+        let range = self.clamp_char_range(&self.range_from_utf16(&range_utf16));
         actual_range.replace(self.range_to_utf16(&range));
-        Some(self.content[range].to_string())
+        self.content.get(range).map(ToOwned::to_owned)
     }
 
     fn selected_text_range(
@@ -393,18 +552,26 @@ impl EntityInputHandler for AddressField {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let range = range_utf16
+        let raw_range = range_utf16
             .as_ref()
             .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .or(self.marked_range.clone())
-            .unwrap_or(self.selected_range.clone());
+            .or_else(|| self.marked_range.clone())
+            .unwrap_or_else(|| self.selected_range.clone());
+        let range = self.clamp_char_range(&raw_range);
 
-        self.content =
-            (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
-                .into();
-        self.selected_range = range.start + new_text.len()..range.start + new_text.len();
+        let before = self.content.get(0..range.start).unwrap_or("");
+        let after = self.content.get(range.end..).unwrap_or("");
+        let next_content = format!("{before}{new_text}{after}");
+        let changed = self.content.as_ref() != next_content.as_str();
+
+        self.content = next_content.into();
+        let caret = range.start + new_text.len();
+        self.selected_range = caret..caret;
         self.selection_reversed = false;
         self.marked_range.take();
+        if changed {
+            self.emit_changed(cx);
+        }
         cx.notify();
     }
 
@@ -416,15 +583,19 @@ impl EntityInputHandler for AddressField {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let range = range_utf16
+        let raw_range = range_utf16
             .as_ref()
             .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .or(self.marked_range.clone())
-            .unwrap_or(self.selected_range.clone());
+            .or_else(|| self.marked_range.clone())
+            .unwrap_or_else(|| self.selected_range.clone());
+        let range = self.clamp_char_range(&raw_range);
 
-        self.content =
-            (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
-                .into();
+        let before = self.content.get(0..range.start).unwrap_or("");
+        let after = self.content.get(range.end..).unwrap_or("");
+        let next_content = format!("{before}{new_text}{after}");
+        let changed = self.content.as_ref() != next_content.as_str();
+
+        self.content = next_content.into();
         if new_text.is_empty() {
             self.marked_range = None;
         } else {
@@ -433,9 +604,16 @@ impl EntityInputHandler for AddressField {
         self.selected_range = new_selected_range_utf16
             .as_ref()
             .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .map(|new_range| new_range.start + range.start..new_range.end + range.end)
+            .map(|new_range| {
+                let s = (new_range.start + range.start).min(self.content.len());
+                let e = (new_range.end + range.start).min(self.content.len()).max(s);
+                s..e
+            })
             .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
         self.selection_reversed = false;
+        if changed {
+            self.emit_changed(cx);
+        }
         cx.notify();
     }
 
@@ -447,7 +625,7 @@ impl EntityInputHandler for AddressField {
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let last_layout = self.last_layout.as_ref()?;
-        let range = self.range_from_utf16(&range_utf16);
+        let range = self.clamp_char_range(&self.range_from_utf16(&range_utf16));
         Some(Bounds::from_corners(
             point(
                 bounds.left() + last_layout.x_for_index(range.start),
@@ -468,10 +646,12 @@ impl EntityInputHandler for AddressField {
     ) -> Option<usize> {
         let line_point = self.last_bounds?.localize(&point)?;
         let last_layout = self.last_layout.as_ref()?;
-        if last_layout.text != self.content {
+        if !last_layout.text.starts_with(self.content.as_ref()) {
             return None;
         }
-        let utf8_index = last_layout.index_for_x(point.x - line_point.x)?;
+        let utf8_index = last_layout
+            .index_for_x(point.x - line_point.x)?
+            .min(self.content.len());
         Some(self.offset_to_utf16(utf8_index))
     }
 }
@@ -540,32 +720,39 @@ impl Element for FieldElement {
     ) -> Self::PrepaintState {
         let input = self.input.read(cx);
         let content = input.content.clone();
-        let selected_range = input.selected_range.clone();
-        let cursor = input.cursor_offset();
+        let completion = input.inline_completion.clone();
+        let selected_range = input.clamp_char_range(&input.selected_range);
+        let cursor = input.clamp_char_boundary(input.cursor_offset());
         let style = window.text_style();
 
-        let (display_text, text_color) = if content.is_empty() {
-            (input.placeholder.clone(), self.placeholder_color)
-        } else {
-            (content, style.color)
-        };
-
-        let run = TextRun {
-            len: display_text.len(),
-            font: style.font(),
-            color: text_color,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let runs = if let Some(marked_range) = input.marked_range.as_ref() {
-            vec![
+        let (display_text, runs) = if content.is_empty() {
+            let text = input.placeholder.clone();
+            let run = TextRun {
+                len: text.len(),
+                font: style.font(),
+                color: self.placeholder_color,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            (text, vec![run])
+        } else if let Some(marked_range) = input.marked_range.as_ref() {
+            let marked = input.clamp_char_range(marked_range);
+            let run = TextRun {
+                len: content.len(),
+                font: style.font(),
+                color: style.color,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            let runs = vec![
                 TextRun {
-                    len: marked_range.start,
+                    len: marked.start,
                     ..run.clone()
                 },
                 TextRun {
-                    len: marked_range.end - marked_range.start,
+                    len: marked.end.saturating_sub(marked.start),
                     underline: Some(UnderlineStyle {
                         color: Some(run.color),
                         thickness: px(1.0),
@@ -574,15 +761,45 @@ impl Element for FieldElement {
                     ..run.clone()
                 },
                 TextRun {
-                    len: display_text.len() - marked_range.end,
+                    len: content.len().saturating_sub(marked.end),
                     ..run
                 },
             ]
             .into_iter()
-            .filter(|run| run.len > 0)
-            .collect()
+            .filter(|r| r.len > 0)
+            .collect();
+            (content, runs)
+        } else if let Some(suffix) = completion.as_ref().filter(|s| !s.is_empty()) {
+            let full: SharedString = format!("{content}{suffix}").into();
+            let runs = vec![
+                TextRun {
+                    len: content.len(),
+                    font: style.font(),
+                    color: style.color,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                },
+                TextRun {
+                    len: suffix.len(),
+                    font: style.font(),
+                    color: self.palette.muted,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                },
+            ];
+            (full, runs)
         } else {
-            vec![run]
+            let run = TextRun {
+                len: content.len(),
+                font: style.font(),
+                color: style.color,
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            (content, vec![run])
         };
 
         let font_size = style.font_size.to_pixels(window.rem_size());
@@ -673,6 +890,7 @@ impl Render for AddressField {
             .track_focus(&self.focus_handle(cx))
             .cursor(CursorStyle::IBeam)
             .on_action(cx.listener(Self::backspace))
+            .on_action(cx.listener(Self::delete_word_backward))
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::left))
             .on_action(cx.listener(Self::right))
@@ -685,6 +903,13 @@ impl Render for AddressField {
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::submit))
+            .on_action(cx.listener(Self::submit_shift))
+            .on_action(cx.listener(Self::submit_background))
+            .on_action(cx.listener(Self::submit_foreground))
+            .on_action(cx.listener(Self::move_up))
+            .on_action(cx.listener(Self::move_down))
+            .on_action(cx.listener(Self::tab_complete))
+            .on_action(cx.listener(Self::shift_tab_complete))
             .on_action(cx.listener(Self::cancel))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
@@ -697,5 +922,49 @@ impl Render for AddressField {
                 palette: self.palette,
                 placeholder_color: self.placeholder_color,
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::Application;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    #[test]
+    fn headless_address_field_manages_text_completion_and_selection() {
+        Application::headless().run(|cx| {
+            let palette = Palette::light();
+            let field = cx.new(|cx| AddressField::new(palette, cx));
+            let events: Rc<RefCell<Vec<FieldEvent>>> = Rc::new(RefCell::new(Vec::new()));
+            let events_ref = events.clone();
+            cx.subscribe(&field, move |_, event, _| {
+                events_ref.borrow_mut().push(event.clone());
+            })
+            .detach();
+
+            field.update(cx, |f, cx| {
+                f.set_text("git", cx);
+                f.set_inline_completion(Some("hub.com".into()), cx);
+                assert_eq!(f.text(), "git");
+                assert_eq!(f.inline_completion(), Some("hub.com"));
+                f.select_all_text(cx);
+                assert_eq!(f.selected_range, 0..3);
+                f.set_placeholder("Filter...", cx);
+
+                // Safe UTF-8 boundary clamping never panics even on out-of-range offsets
+                let clamped = f.clamp_char_range(&(0..999));
+                assert_eq!(clamped, 0..3);
+                assert_eq!(f.previous_word_boundary(3), 0);
+            });
+            // Programmatic set_text does not emit spurious Changed events
+            assert!(events.borrow().is_empty());
+
+            cx.spawn(async move |cx| {
+                let _ = cx.update(|cx| cx.quit());
+            })
+            .detach();
+        });
     }
 }
