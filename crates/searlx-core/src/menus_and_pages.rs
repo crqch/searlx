@@ -3,7 +3,9 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::address::inspect_host_lookalike;
 use crate::blocking::normalize_site_key;
+use crate::domain::{PermissionDecision, PermissionKind};
 use crate::error::{CoreError, Result};
 use crate::ids::TabId;
 use crate::privacy::PermissionStore;
@@ -92,14 +94,49 @@ pub struct SiteCardInput<'a> {
     pub permissions: &'a PermissionStore,
 }
 
+/// Per-site permission decisions displayed in the Site Card (`FEATURES.md` §5.8).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SitePermissionsCardState {
+    /// Camera decision for the site.
+    pub camera: PermissionDecision,
+    /// Microphone decision for the site.
+    pub microphone: PermissionDecision,
+    /// Location decision for the site.
+    pub location: PermissionDecision,
+    /// Notifications decision for the site.
+    pub notifications: PermissionDecision,
+    /// Conflicting origin spellings differing only by explicit default port.
+    pub conflicting_origins: Vec<String>,
+}
+
+/// Custom shortcut labels displayed inside the Site Card (`FEATURES.md` §5.8).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SiteCardShortcuts {
+    /// Shortcut for Copy Address (`⇧⌘C` by default).
+    pub copy_address: String,
+    /// Shortcut for Darken This Site (`⇧⌘D` by default).
+    pub darken_site: String,
+}
+
+impl Default for SiteCardShortcuts {
+    fn default() -> Self {
+        Self {
+            copy_address: "⇧⌘C".into(),
+            darken_site: "⇧⌘D".into(),
+        }
+    }
+}
+
 /// Complete, capability-gated site card model (`FEATURES.md` §5.8, P2-13).
 ///
 /// Explicitly excludes mute, site CSS, and reader mode (`FEATURES.md` §5.8).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct SiteCardModel {
-    /// Header label: host without `www.`, `"File"` for `file://`, or scheme name.
+    /// Header label: host without `www.` (punycode preserved when IDN lookalike), `"File"` for `file://`, or scheme name.
     pub header: String,
+    /// Whether the host triggered IDN homograph/punycode lookalike protection (`FEATURES.md` §4.2, §5.8).
+    pub is_lookalike: bool,
     /// Connection state row.
     pub connection: ConnectionState,
     /// Certificate action label, when applicable.
@@ -118,6 +155,8 @@ pub struct SiteCardModel {
     pub block_ads_and_trackers: Option<bool>,
     /// Whether `"Site Permissions"` row is shown (`http`/`https` only).
     pub show_site_permissions: bool,
+    /// Per-site permissions summary when `show_site_permissions` is true.
+    pub site_permissions: Option<SitePermissionsCardState>,
     /// Whether Notifications `Allow` is disabled because notifications are off in Settings › Privacy.
     pub notifications_allow_disabled: bool,
     /// Notice shown inside Site Permissions (`"Permissions aren't saved in a private tab"`, etc.).
@@ -128,6 +167,8 @@ pub struct SiteCardModel {
     pub dont_float_videos_here: Option<bool>,
     /// `"Darken This Site"` row (`Some(enabled)` when Dusk is on, not paused, frame is dark, and page has a host).
     pub darken_this_site: Option<bool>,
+    /// Shortcut label for Darken This Site (`⇧⌘D` by default).
+    pub darken_shortcut: String,
     /// `"Keep This Site Awake"` row (`Some(enabled)` on `http`/`https`).
     pub keep_this_site_awake: Option<bool>,
 }
@@ -136,6 +177,12 @@ impl SiteCardModel {
     /// Build and gate every row of the site card from [`SiteCardInput`] (`FEATURES.md` §5.8).
     #[must_use]
     pub fn build(input: &SiteCardInput<'_>) -> Self {
+        Self::build_with_shortcuts(input, &SiteCardShortcuts::default())
+    }
+
+    /// Build the site card using user-configured shortcut labels (`FEATURES.md` §5.8).
+    #[must_use]
+    pub fn build_with_shortcuts(input: &SiteCardInput<'_>, shortcuts: &SiteCardShortcuts) -> Self {
         let is_web = matches!(input.url.scheme(), "http" | "https");
         let has_host = input.url.host().is_some();
         let is_pdf = input
@@ -146,12 +193,17 @@ impl SiteCardModel {
             .ends_with(".pdf");
         let (zoom_min, zoom_max) = if is_pdf { (20, 600) } else { (40, 300) };
 
+        let lookalike_info = input.url.host().map(inspect_host_lookalike);
+        let is_lookalike = lookalike_info.as_ref().is_some_and(|i| i.is_lookalike);
         let header = match input.url.scheme() {
             "file" => "File".to_owned(),
-            _ => input.url.host().map_or_else(
-                || input.url.scheme().to_owned(),
-                |h| h.trim_start_matches("www.").to_owned(),
-            ),
+            _ => match lookalike_info {
+                Some(info) if info.is_lookalike => info.safe_display_host,
+                _ => input.url.host().map_or_else(
+                    || input.url.scheme().to_owned(),
+                    |h| h.trim_start_matches("www.").to_owned(),
+                ),
+            },
         };
 
         let block_ads_and_trackers =
@@ -159,17 +211,50 @@ impl SiteCardModel {
                 .then_some(input.site_blocker_on);
 
         let notifications_allow_disabled = !input.permissions.notifications_globally_enabled;
+        let conflicting_origins = if is_web && !input.private_tab {
+            input.permissions.conflicting_origins_for_url(input.url)
+        } else {
+            Vec::new()
+        };
         let permissions_notice = if !is_web {
             None
         } else if input.private_tab {
             Some("Permissions aren't saved in a private tab".to_owned())
-        } else if input.permissions.has_port_spelling_conflict(input.url) {
+        } else if !conflicting_origins.is_empty() {
             Some("Saved two ways for this site. Pick one to keep.".to_owned())
         } else if notifications_allow_disabled {
             Some("Notifications are off in Settings › Privacy".to_owned())
         } else {
             None
         };
+
+        let site_permissions = is_web.then(|| SitePermissionsCardState {
+            camera: input.permissions.evaluate_request(
+                input.url,
+                PermissionKind::Camera,
+                input.private_tab,
+                false,
+            ),
+            microphone: input.permissions.evaluate_request(
+                input.url,
+                PermissionKind::Microphone,
+                input.private_tab,
+                false,
+            ),
+            location: input.permissions.evaluate_request(
+                input.url,
+                PermissionKind::Location,
+                input.private_tab,
+                false,
+            ),
+            notifications: input.permissions.evaluate_request(
+                input.url,
+                PermissionKind::Notifications,
+                input.private_tab,
+                false,
+            ),
+            conflicting_origins,
+        });
 
         let play_sound_by_itself = (!input.private_tab && is_web && !input.settings.media_click)
             .then_some(input.site_autoplay_sound);
@@ -195,23 +280,26 @@ impl SiteCardModel {
 
         Self {
             header,
+            is_lookalike,
             connection: input.connection,
             certificate_action: input
                 .connection
                 .certificate_button_label()
                 .map(ToOwned::to_owned),
-            copy_address_shortcut: "⇧⌘C".into(),
+            copy_address_shortcut: shortcuts.copy_address.clone(),
             show_print: input.engine_supports_print,
             zoom_percent: input.zoom_percent.clamp(zoom_min, zoom_max),
             zoom_min,
             zoom_max,
             block_ads_and_trackers,
             show_site_permissions: is_web,
+            site_permissions,
             notifications_allow_disabled,
             permissions_notice,
             play_sound_by_itself,
             dont_float_videos_here,
             darken_this_site,
+            darken_shortcut: shortcuts.darken_site.clone(),
             keep_this_site_awake,
         }
     }
@@ -498,6 +586,27 @@ impl InternalPageKind {
         }
     }
 
+    /// Canonical `search://` URL for this internal page with an optional detail sub-route.
+    pub fn to_url(self, detail: Option<&str>) -> Result<PageUrl> {
+        let base = match self {
+            Self::Settings => "search://settings",
+            Self::History => "search://history",
+            Self::Downloads => "search://downloads",
+            Self::Bookmarks => "search://bookmarks",
+            Self::Passwords => "search://passwords",
+            Self::Archive => "search://archive",
+            Self::Import => "search://import",
+            Self::ReleaseNotes => "search://release-notes",
+        };
+        let suffix = detail
+            .map(|d| d.trim_matches('/'))
+            .filter(|d| !d.is_empty());
+        match suffix {
+            Some(sub) => PageUrl::parse(&format!("{base}/{sub}")),
+            None => PageUrl::parse(base),
+        }
+    }
+
     /// Default title for the internal page tab.
     #[must_use]
     pub const fn title(self) -> &'static str {
@@ -709,5 +818,60 @@ mod tests {
             .find(|i| i.id == "tab.sleep")
             .expect("sleep item");
         assert!(!sleep_item.enabled, "active tab cannot be put to sleep");
+    }
+
+    #[test]
+    fn site_card_surfaces_lookalike_and_permissions_summary() {
+        let settings = Settings::default();
+        let mut perms = PermissionStore::new();
+        let url = PageUrl::parse("https://example.com/app").expect("url");
+        perms
+            .insert_raw_storage_key(
+                "capture.https://example.com|camera",
+                PermissionDecision::Allow,
+            )
+            .expect("allow");
+        perms
+            .insert_raw_storage_key(
+                "capture.https://example.com:443|camera",
+                PermissionDecision::Refuse,
+            )
+            .expect("conflict");
+
+        let card = SiteCardModel::build_with_shortcuts(
+            &SiteCardInput {
+                url: &url,
+                connection: ConnectionState::Secure,
+                private_tab: false,
+                zoom_percent: 100,
+                engine_supports_print: true,
+                engine_supports_floating_video: true,
+                shield_in_trouble: false,
+                site_blocker_on: true,
+                dusk_paused: false,
+                frame_is_dark: true,
+                site_dusk_on: false,
+                site_autoplay_sound: false,
+                site_dont_float_videos: false,
+                site_keep_awake: false,
+                settings: &settings,
+                permissions: &perms,
+            },
+            &SiteCardShortcuts {
+                copy_address: "Ctrl+Shift+C".into(),
+                darken_site: "Ctrl+Shift+D".into(),
+            },
+        );
+        assert_eq!(card.copy_address_shortcut, "Ctrl+Shift+C");
+        assert_eq!(card.darken_shortcut, "Ctrl+Shift+D");
+        let sp = card.site_permissions.expect("permissions summary");
+        assert_eq!(sp.conflicting_origins.len(), 2);
+        assert_eq!(
+            InternalPageKind::Settings
+                .to_url(Some("privacy"))
+                .expect("to_url")
+                .as_str(),
+            "search://settings/privacy"
+        );
     }
 }

@@ -363,6 +363,16 @@ impl SidePanelController {
         Ok(())
     }
 
+    /// Open the compact Downloads list in the side panel (`FEATURES.md` §3.8).
+    pub fn open_downloads(&mut self) {
+        self.content = Some(SidePanelContent::Downloads);
+    }
+
+    /// Close the side panel (`FEATURES.md` §3.8).
+    pub fn close(&mut self) {
+        self.content = None;
+    }
+
     /// Press an extension's toolbar button: opens its panel, or closes it if already open (`FEATURES.md` §3.8).
     pub fn toggle_extension_panel(
         &mut self,

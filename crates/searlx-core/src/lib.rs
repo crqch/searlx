@@ -10,6 +10,7 @@ pub mod apple_and_webauthn;
 pub mod blocking;
 pub mod bookmarks;
 pub mod commands;
+pub mod controller;
 pub mod data;
 pub mod domain;
 pub mod downloads;
@@ -39,21 +40,32 @@ pub mod url;
 pub mod vault;
 
 pub use address::{
-    AddressCommand, AddressInvalidReason, AddressResolution, HostLookalikeInfo, OpenTabCandidate,
-    ParseOptions, SearchEngine, SiteSearch, SubmitDisposition, SuggestionContext, SuggestionRow,
-    build_suggestions, builtin_site_searches, expand_search_template, inline_completion,
+    AddressCommand, AddressInvalidReason, AddressResolution, HostLookalikeInfo, ICloudTabCandidate,
+    OpenTabCandidate, ParseOptions, PastSiteSearchRecord, SearchEngine, SiteSearch,
+    SubmitDisposition, SuggestionContext, SuggestionExtras, SuggestionRow, build_suggestions,
+    build_suggestions_full, builtin_site_searches, expand_search_template, inline_completion,
     inspect_host_lookalike, match_site_search_offer, resolve_address, resolve_address_with_fs,
+    should_query_search_suggestions,
 };
 pub use blocking::{
     COSMETIC_AD_SELECTORS, DomElementDescriptor, FIRST_LOAD_BLOCKER_WAIT_MS, HideElementsManager,
     SiteCssManager, TRACKER_DOMAINS, YOUTUBE_ISOLATED_FALLBACK_JS, YOUTUBE_PAGE_WORLD_JS,
-    compile_webkit_content_rules, normalize_site_key, sanitize_user_css,
-    should_block_third_party_request, synthesize_selector, youtube_ad_scripts,
+    compile_webkit_content_rules, compile_webkit_content_rules_with_shield, normalize_site_key,
+    sanitize_user_css, should_block_third_party_request, synthesize_selector, youtube_ad_scripts,
 };
 pub use bookmarks::{BookmarkMenuAction, BookmarkSearchHit, BookmarksManager};
 pub use commands::{
     CommandDescriptor, CommandId, CommandRegistry, KeyChord, KeyModifiers, MenuCategory,
     ShortcutConflictError, is_reserved_shortcut,
+};
+pub use controller::{
+    AppCommand, BrowserController, EngineCapabilities, EngineDataKinds, EngineDialogKind,
+    EngineDirective, EngineFindOptions, EngineNewWindowDisposition, EnginePermissionKind,
+    EngineRect, EngineTabOptions, ExternalDialogRequest, InjectAt, InternalPageData,
+    PendingAuthChallenge, PendingCertError, PendingJsDialog, PendingPasswordOffer,
+    PendingPermissionPrompt, ScriptWorld, SplitWorkspace, UiAddressBarState, UiDownloadsSummary,
+    UiFindState, UiLauncherState, UiProfileItem, UiSidePanelState, UiSnapshot, UiSpaceItem,
+    UiSplitPaneItem, UiTabItem,
 };
 pub use domain::{
     BookmarkItem, BookmarkTree, CURRENT_SCHEMA_VERSION, EngineId, HistoryVisit, PermissionDecision,
@@ -82,8 +94,8 @@ pub use ids::{CollectionId, GroupId, PinId, ProfileId, SpaceId, TabId, TabIdAllo
 pub use import::{MAX_IMPORT_FILE_BYTES, SearchImportReport, import_search_directory};
 pub use menus_and_pages::{
     ConnectionState, ContextMenuItem, InternalPageKind, KNOWN_VIDEO_SITES, SiteCardInput,
-    SiteCardModel, build_page_context_menu, build_tab_context_menu, clean_link_url,
-    open_internal_page, step_zoom_percent,
+    SiteCardModel, SiteCardShortcuts, SitePermissionsCardState, build_page_context_menu,
+    build_tab_context_menu, clean_link_url, open_internal_page, step_zoom_percent,
 };
 pub use navigation::{InPageError, NavDirection, NavEntry, TabNavigation};
 pub use page_tools::{
@@ -111,7 +123,7 @@ pub use recovery::{
 pub use session::{
     DEFAULT_WINDOW_HEIGHT, DEFAULT_WINDOW_WIDTH, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, RestoreMode,
     RestoredSession, RestoredTab, RestoredWindow, WindowFrame, default_window_session,
-    restore_session, save_additional_windows, save_window_session,
+    restore_session, restore_space_session, save_additional_windows, save_window_session,
 };
 pub use settings::{
     AddressBarWidth, AutoCloseAfter, DownloadsOpenMode, FloatStyle, HighRefreshMode,

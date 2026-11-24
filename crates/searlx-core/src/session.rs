@@ -242,6 +242,26 @@ pub fn restore_session(
     })
 }
 
+/// Restore a single named space's `session-<space_id>.json` from `store` (`FEATURES.md` §1, §25).
+pub fn restore_space_session(
+    store: &DataStore,
+    space_id: &str,
+    mode: RestoreMode,
+    allocator: &mut TabIdAllocator,
+) -> Result<(RestoredWindow, Option<PathBuf>)> {
+    let filename = format!("session-{space_id}.json");
+    let outcome = store.read_or_default::<SessionFile>(&filename)?;
+    let mut win = build_restored_window_from_session(
+        WindowId::new(),
+        WindowFrame::default(),
+        &outcome.value,
+        mode,
+        allocator,
+    )?;
+    win.space = Some(space_id.to_owned());
+    Ok((win, outcome.quarantined_to))
+}
+
 fn build_restored_window_from_session(
     window_id: WindowId,
     frame: WindowFrame,
@@ -269,8 +289,6 @@ fn build_restored_window_from_session(
         file.active.min(tabs.len() - 1)
     };
 
-    apply_sleep_policy(&mut tabs, active);
-
     let (groups, splits) = if mode == RestoreMode::FreshStart {
         (Vec::new(), Vec::new())
     } else {
@@ -283,6 +301,8 @@ fn build_restored_window_from_session(
             validate_splits(&file.splits, &tabs),
         )
     };
+
+    apply_sleep_policy_with_splits(&mut tabs, active, &splits);
 
     Ok(RestoredWindow {
         id: window_id,
@@ -377,10 +397,30 @@ fn restore_one_tab(raw: &SessionTab, allocator: &mut TabIdAllocator) -> Option<R
     })
 }
 
-/// Mark every tab asleep except the active tab (`FEATURES.md` §1, §3.5).
+/// Mark every tab asleep except the active tab and any panes splitting the screen with it (`FEATURES.md` §1, §3.5, §3.7).
 fn apply_sleep_policy(tabs: &mut [RestoredTab], active: usize) {
+    apply_sleep_policy_with_splits(tabs, active, &[]);
+}
+
+fn apply_sleep_policy_with_splits(tabs: &mut [RestoredTab], active: usize, splits: &[Split]) {
+    let active_key = tabs.get(active).map(|t| t.key.as_str());
+    let mut wake_keys: Vec<String> = Vec::new();
+    if let Some(akey) = active_key {
+        wake_keys.push(akey.to_owned());
+        for split in splits {
+            let keys = split_tab_keys(split);
+            if keys.iter().any(|k| k == akey) {
+                for key in keys {
+                    if !wake_keys.iter().any(|existing| existing == &key) {
+                        wake_keys.push(key);
+                    }
+                }
+            }
+        }
+    }
+
     for (index, tab) in tabs.iter_mut().enumerate() {
-        if index == active {
+        if index == active || wake_keys.iter().any(|k| k == &tab.key) {
             tab.sleeping = false;
             tab.should_load_now = true;
         } else {
@@ -390,16 +430,39 @@ fn apply_sleep_policy(tabs: &mut [RestoredTab], active: usize) {
     }
 }
 
-/// Filter persisted splits so only pairs referencing existing, distinct tabs survive (`FEATURES.md` §3.7).
+fn split_tab_keys(split: &Split) -> Vec<String> {
+    if let Some(serde_json::Value::Array(arr)) = split.extra.get("panes") {
+        let keys: Vec<String> = arr
+            .iter()
+            .filter_map(|v| v.as_str().map(ToOwned::to_owned))
+            .filter(|k| !k.is_empty())
+            .collect();
+        if keys.len() >= 2 {
+            return keys;
+        }
+    }
+    let mut out = Vec::new();
+    if !split.first.is_empty() {
+        out.push(split.first.clone());
+    }
+    if !split.second.is_empty() && !out.contains(&split.second) {
+        out.push(split.second.clone());
+    }
+    out
+}
+
+/// Filter persisted splits so only splits with `2..=4` existing, distinct tabs survive (`FEATURES.md` §3.7).
 fn validate_splits(splits: &[Split], tabs: &[RestoredTab]) -> Vec<Split> {
     splits
         .iter()
         .filter(|split| {
-            !split.first.is_empty()
-                && !split.second.is_empty()
-                && split.first != split.second
-                && tabs.iter().any(|t| t.key == split.first)
-                && tabs.iter().any(|t| t.key == split.second)
+            let keys = split_tab_keys(split);
+            if !(2..=4).contains(&keys.len()) {
+                return false;
+            }
+            let mut seen = std::collections::BTreeSet::new();
+            keys.iter()
+                .all(|key| seen.insert(key.as_str()) && tabs.iter().any(|t| t.key == *key))
         })
         .cloned()
         .collect()
@@ -689,5 +752,51 @@ mod tests {
         assert_eq!(restored.windows.len(), 1);
         assert_eq!(restored.windows[0].tabs.len(), 1);
         assert_eq!(restored.windows[0].frame, WindowFrame::default());
+    }
+
+    #[test]
+    fn restore_space_session_wakes_active_tab_and_split_panes_only() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = DataStore::new(temp.path());
+        let space_id = "space-work";
+        let tabs: Vec<SessionTab> = (0..5)
+            .map(|i| SessionTab {
+                id: format!("t-{i}"),
+                url: format!("https://example.com/{i}"),
+                title: format!("Tab {i}"),
+                ..SessionTab::default()
+            })
+            .collect();
+        let session_file = SessionFile {
+            version: CURRENT_SCHEMA_VERSION,
+            active: 1,
+            tabs,
+            splits: vec![Split {
+                id: "split-1".into(),
+                axis: "vertical".into(),
+                ratio: 0.5,
+                first: "t-1".into(),
+                second: "t-3".into(),
+                extra: serde_json::Map::new(),
+            }],
+            ..SessionFile::default()
+        };
+        store
+            .save_session(Some(space_id), &session_file)
+            .expect("save space session");
+
+        let mut alloc = TabIdAllocator::new();
+        let (win, quarantined) =
+            restore_space_session(&store, space_id, RestoreMode::Normal, &mut alloc)
+                .expect("restore space");
+        assert!(quarantined.is_none());
+        assert_eq!(win.space.as_deref(), Some(space_id));
+        assert!(!win.tabs[1].sleeping);
+        assert!(win.tabs[1].should_load_now);
+        assert!(!win.tabs[3].sleeping, "split partner must wake too");
+        assert!(win.tabs[3].should_load_now);
+        assert!(win.tabs[0].sleeping);
+        assert!(win.tabs[2].sleeping);
+        assert!(win.tabs[4].sleeping);
     }
 }

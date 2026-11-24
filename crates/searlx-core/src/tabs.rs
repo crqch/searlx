@@ -60,6 +60,9 @@ pub struct TabEntry {
     pub private: bool,
     /// Reading scroll progress `0.0..=1.0` (`tabs.reading`, `FEATURES.md` §3.1).
     pub reading_progress: f32,
+    /// Live engine webview handle when materialized, or `None` while sleeping (`FEATURES.md` §3.5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_tab_id: Option<TabId>,
 }
 
 impl TabEntry {
@@ -87,16 +90,20 @@ impl TabEntry {
             sleep_placeholder: None,
             private,
             reading_progress: 0.0,
+            engine_tab_id: None,
         }
     }
 
-    /// Whether the tab is blank (`search://` or `about:blank`) and not in a group or pin.
+    /// Whether the tab is blank (`search://`, `search://newtab`, or `about:blank`) and not in a group or pin.
     #[must_use]
     pub fn is_reusable_blank(&self) -> bool {
         !self.private
             && !self.pinned
             && self.group.is_none()
-            && matches!(self.url.as_str(), "search://" | "about:blank")
+            && matches!(
+                self.url.as_str(),
+                "search://" | "search://newtab" | "about:blank"
+            )
     }
 
     /// Effective title shown in the row.
@@ -243,6 +250,7 @@ impl DragSession {
 
 /// Complete tab row, layout, and drag controller (`P1-06`).
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct TabModel {
     tabs: Vec<TabEntry>,
     active: usize,
@@ -254,6 +262,8 @@ pub struct TabModel {
     new_tab_place: NewTabPlace,
     close_goes_back: bool,
     pins_go_home: bool,
+    new_after_last: bool,
+    tabs_lazy: bool,
     drag: Option<DragSession>,
 }
 
@@ -273,6 +283,41 @@ impl TabModel {
             new_tab_place: NewTabPlace::Next,
             close_goes_back: false,
             pins_go_home: true,
+            new_after_last: false,
+            tabs_lazy: false,
+            drag: None,
+        })
+    }
+
+    /// Restore a tab model from existing tabs (creating a blank tab if `tabs` is empty).
+    pub fn from_tabs(
+        mut tabs: Vec<TabEntry>,
+        active: usize,
+        allocator: &mut TabIdAllocator,
+    ) -> Result<Self> {
+        if tabs.is_empty() {
+            let id = allocator.allocate();
+            tabs.push(TabEntry::new(
+                id,
+                PageUrl::parse("search://")?,
+                "New Tab",
+                false,
+            ));
+        }
+        let active = active.min(tabs.len() - 1);
+        Ok(Self {
+            tabs,
+            active,
+            previous_active: None,
+            layout: TabLayoutMode::LeftColumn,
+            folded: false,
+            fold_to_icons: false,
+            layout_before_fold_icons: None,
+            new_tab_place: NewTabPlace::Next,
+            close_goes_back: false,
+            pins_go_home: true,
+            new_after_last: false,
+            tabs_lazy: false,
             drag: None,
         })
     }
@@ -349,6 +394,67 @@ impl TabModel {
         self.pins_go_home = enabled;
     }
 
+    /// Whether closing the active tab returns to the previously active tab.
+    #[must_use]
+    pub const fn close_goes_back(&self) -> bool {
+        self.close_goes_back
+    }
+
+    /// Whether `⌘W` on a pin resets its URL to `home` (`pins.home`).
+    #[must_use]
+    pub const fn pins_go_home(&self) -> bool {
+        self.pins_go_home
+    }
+
+    /// Configure whether closing the last loose tab opens a blank tab even if pins are awake (`tabs.newAfterLast`).
+    pub fn set_new_after_last(&mut self, enabled: bool) {
+        self.new_after_last = enabled;
+    }
+
+    /// Whether closing the last loose tab always opens a blank tab (`tabs.newAfterLast`).
+    #[must_use]
+    pub const fn new_after_last(&self) -> bool {
+        self.new_after_last
+    }
+
+    /// Configure whether tabs restore/open lazily (`tabs.lazy`).
+    pub fn set_tabs_lazy(&mut self, enabled: bool) {
+        self.tabs_lazy = enabled;
+    }
+
+    /// Whether tabs open/restore lazily (`tabs.lazy`).
+    #[must_use]
+    pub const fn tabs_lazy(&self) -> bool {
+        self.tabs_lazy
+    }
+
+    /// Associate or clear the live engine webview handle on `id`.
+    pub fn set_engine_tab_id(&mut self, id: TabId, engine_tab_id: Option<TabId>) {
+        if let Some(tab) = self.tab_mut(id) {
+            tab.engine_tab_id = engine_tab_id;
+        }
+    }
+
+    /// Explicitly update sleeping/placeholder metadata on `id`.
+    pub fn set_sleeping_state(&mut self, id: TabId, sleeping: bool, placeholder: Option<String>) {
+        if let Some(tab) = self.tab_mut(id) {
+            tab.sleeping = sleeping;
+            tab.sleep_placeholder = placeholder;
+            if sleeping {
+                tab.loading = false;
+                tab.audible = false;
+            }
+        }
+    }
+
+    /// Clear `put_away` and wake a grouped tab.
+    pub fn wake_tab(&mut self, id: TabId) {
+        if let Some(tab) = self.tab_mut(id) {
+            tab.sleeping = false;
+            tab.put_away = false;
+        }
+    }
+
     /// Toggle sidebar fold (`⌘S`, `FEATURES.md` §2.2).
     pub fn toggle_fold(&mut self) {
         if self.fold_to_icons && self.layout != TabLayoutMode::TopTabs {
@@ -409,6 +515,21 @@ impl TabModel {
         private: bool,
         activate: bool,
     ) -> Result<TabId> {
+        self.create_tab_with_options(allocator, url, title, private, activate, None, false)
+    }
+
+    /// Open a new tab with explicit `opener` (for `NewTabPlace::Next`) and initial `sleeping` flag.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_tab_with_options(
+        &mut self,
+        allocator: &mut TabIdAllocator,
+        url: Option<PageUrl>,
+        title: impl Into<String>,
+        private: bool,
+        activate: bool,
+        opener: Option<TabId>,
+        sleeping: bool,
+    ) -> Result<TabId> {
         let is_blank_request = url.is_none();
         if !private
             && is_blank_request
@@ -425,60 +546,162 @@ impl TabModel {
             None => PageUrl::parse("search://")?,
         };
         let id = allocator.allocate();
-        let entry = TabEntry::new(id, target_url, title, private);
+        let mut entry = TabEntry::new(id, target_url, title, private);
+        if !activate && sleeping {
+            entry.sleeping = true;
+            entry.sleep_placeholder = Some(entry.display_title().to_owned());
+        }
 
         let pin_boundary = self.pin_count();
+        let next_anchor = opener
+            .and_then(|op_id| self.tabs.iter().position(|t| t.id == op_id))
+            .unwrap_or(self.active);
         let insert_idx = match self.new_tab_place {
             NewTabPlace::Top => pin_boundary,
             NewTabPlace::End => self.tabs.len(),
-            NewTabPlace::Next => (self.active + 1).max(pin_boundary).min(self.tabs.len()),
+            NewTabPlace::Next => (next_anchor + 1).max(pin_boundary).min(self.tabs.len()),
         };
 
-        if insert_idx <= self.active && !self.tabs.is_empty() {
-            self.active += 1;
+        let had_tabs = !self.tabs.is_empty();
+        if had_tabs {
+            if insert_idx <= self.active {
+                self.active += 1;
+            }
+            if let Some(prev) = self.previous_active
+                && insert_idx <= prev
+            {
+                self.previous_active = Some(prev + 1);
+            }
         }
         self.tabs.insert(insert_idx, entry);
+        if activate {
+            self.previous_active = had_tabs.then_some(self.active);
+            self.active = insert_idx;
+        }
+        Ok(id)
+    }
+
+    /// Duplicate an existing tab right next to it (preserving group membership,
+    /// placing duplicated pins as loose tabs at the start of the loose section).
+    pub fn duplicate_tab(
+        &mut self,
+        allocator: &mut TabIdAllocator,
+        source_id: TabId,
+        activate: bool,
+    ) -> Result<TabId> {
+        let Some(src_idx) = self.tabs.iter().position(|t| t.id == source_id) else {
+            return Err(CoreError::Invalid(format!("no such tab: {source_id}")));
+        };
+        let src = self.tabs[src_idx].clone();
+        let new_id = allocator.allocate();
+        let mut copy = TabEntry::new(new_id, src.url, src.title, src.private);
+        copy.favicon = src.favicon;
+        copy.group = src.group;
+        copy.muted = src.muted;
+        if !activate {
+            copy.sleeping = true;
+            copy.sleep_placeholder = Some(copy.display_title().to_owned());
+        }
+        let pin_boundary = self.pin_count();
+        let insert_idx = if src.pinned {
+            pin_boundary
+        } else {
+            (src_idx + 1).max(pin_boundary).min(self.tabs.len())
+        };
+        if insert_idx <= self.active {
+            self.active += 1;
+        }
+        if let Some(prev) = self.previous_active
+            && insert_idx <= prev
+        {
+            self.previous_active = Some(prev + 1);
+        }
+        self.tabs.insert(insert_idx, copy);
         if activate {
             self.previous_active = Some(self.active);
             self.active = insert_idx;
         }
-        Ok(id)
+        Ok(new_id)
     }
 
     /// Close a tab (`⌘W`, `FEATURES.md` §3.2):
     /// - A pinned tab is **put down** (`sleeping = true`, returns to `home` if `pins_go_home`).
     /// - An awake grouped tab is **put away** (`sleeping = true`, `put_away = true`);
     ///   closing a put-away grouped tab removes it.
-    /// - Removing the last tab creates a fresh blank tab.
+    /// - Removing the last visible loose tab creates a fresh blank tab if `new_after_last` is set or no pin is awake.
     pub fn close_tab(&mut self, id: TabId, allocator: &mut TabIdAllocator) -> Result<()> {
         let Some(index) = self.tabs.iter().position(|t| t.id == id) else {
             return Err(CoreError::Invalid(format!("no such tab: {id}")));
         };
 
         if self.tabs[index].pinned {
-            let tab = &mut self.tabs[index];
-            tab.sleeping = true;
-            tab.loading = false;
-            tab.audible = false;
-            if self.pins_go_home
-                && let Some(home) = tab.home.clone()
             {
-                tab.url = home;
+                let tab = &mut self.tabs[index];
+                tab.sleeping = true;
+                tab.loading = false;
+                tab.audible = false;
+                tab.engine_tab_id = None;
+                if self.pins_go_home
+                    && let Some(home) = tab.home.clone()
+                {
+                    tab.url = home;
+                    tab.letter = compute_letter(&tab.url, &tab.title);
+                }
+                tab.sleep_placeholder = Some(tab.display_title().to_owned());
+            }
+            if index == self.active
+                && let Some(next_idx) = self.find_fallback_active_after_hide(index)
+            {
+                self.previous_active = None;
+                self.active = next_idx;
+                self.tabs[next_idx].sleeping = false;
+                self.tabs[next_idx].put_away = false;
             }
             return Ok(());
         }
 
         if self.tabs[index].group.is_some() && !self.tabs[index].put_away {
-            let tab = &mut self.tabs[index];
-            tab.sleeping = true;
-            tab.put_away = true;
-            tab.loading = false;
-            tab.audible = false;
+            {
+                let tab = &mut self.tabs[index];
+                tab.sleeping = true;
+                tab.put_away = true;
+                tab.loading = false;
+                tab.audible = false;
+                tab.engine_tab_id = None;
+                tab.sleep_placeholder = Some(tab.display_title().to_owned());
+            }
+            if index == self.active {
+                if let Some(next_idx) = self.find_fallback_active_after_hide(index) {
+                    self.previous_active = None;
+                    self.active = next_idx;
+                    self.tabs[next_idx].sleeping = false;
+                    self.tabs[next_idx].put_away = false;
+                } else if self.new_after_last {
+                    let blank_id = allocator.allocate();
+                    let blank =
+                        TabEntry::new(blank_id, PageUrl::parse("search://")?, "New Tab", false);
+                    self.tabs.push(blank);
+                    self.active = self.tabs.len() - 1;
+                    self.previous_active = None;
+                }
+            }
             return Ok(());
         }
 
         self.tabs.remove(index);
-        if self.tabs.is_empty() || self.tabs.iter().all(|t| t.pinned) {
+        self.previous_active = self.previous_active.and_then(|prev| {
+            if prev == index {
+                None
+            } else if prev > index {
+                Some(prev - 1)
+            } else {
+                Some(prev)
+            }
+        });
+
+        let has_awake_pin = self.tabs.iter().any(|t| t.pinned && !t.sleeping);
+        let has_visible_loose = self.tabs.iter().any(|t| !t.pinned && !t.put_away);
+        if self.tabs.is_empty() || (!has_visible_loose && (self.new_after_last || !has_awake_pin)) {
             let blank_id = allocator.allocate();
             let blank = TabEntry::new(blank_id, PageUrl::parse("search://")?, "New Tab", false);
             self.tabs.push(blank);
@@ -487,24 +710,23 @@ impl TabModel {
             return Ok(());
         }
 
-        if self.close_goes_back
-            && index == self.active
-            && let Some(prev) = self.previous_active.take()
-        {
-            let adjusted = if prev > index { prev - 1 } else { prev };
-            if adjusted < self.tabs.len() {
-                self.active = adjusted;
-                self.tabs[self.active].sleeping = false;
-                return Ok(());
+        if index == self.active {
+            if self.close_goes_back
+                && let Some(prev) = self.previous_active.take()
+                && prev < self.tabs.len()
+                && !self.tabs[prev].put_away
+                && !(self.tabs[prev].pinned && self.tabs[prev].sleeping)
+            {
+                self.active = prev;
+            } else {
+                let candidate = index.min(self.tabs.len() - 1);
+                self.active = self.nearest_eligible_index(candidate).unwrap_or(candidate);
             }
-        }
-
-        if self.active >= self.tabs.len() {
-            self.active = self.tabs.len() - 1;
         } else if index < self.active {
             self.active -= 1;
         }
         self.tabs[self.active].sleeping = false;
+        self.tabs[self.active].put_away = false;
         Ok(())
     }
 
@@ -522,6 +744,10 @@ impl TabModel {
         }
 
         let active_id = self.tabs[self.active].id;
+        let prev_id = self
+            .previous_active
+            .and_then(|idx| self.tabs.get(idx))
+            .map(|t| t.id);
         let mut entry = self.tabs.remove(index);
         let pin_id = PinId::new();
         entry.pinned = true;
@@ -532,7 +758,7 @@ impl TabModel {
 
         let dest = self.pin_count();
         self.tabs.insert(dest, entry);
-        self.restore_active_by_id(active_id);
+        self.restore_active_and_prev_by_id(active_id, prev_id);
         Ok(pin_id)
     }
 
@@ -546,6 +772,10 @@ impl TabModel {
         }
 
         let active_id = self.tabs[self.active].id;
+        let prev_id = self
+            .previous_active
+            .and_then(|idx| self.tabs.get(idx))
+            .map(|t| t.id);
         let mut entry = self.tabs.remove(index);
         entry.pinned = false;
         entry.pin_id = None;
@@ -553,7 +783,7 @@ impl TabModel {
 
         let dest = self.pin_count();
         self.tabs.insert(dest, entry);
-        self.restore_active_by_id(active_id);
+        self.restore_active_and_prev_by_id(active_id, prev_id);
         Ok(())
     }
 
@@ -574,6 +804,7 @@ impl TabModel {
             ));
         }
         tab.sleeping = true;
+        tab.engine_tab_id = None;
         tab.sleep_placeholder = Some(tab.display_title().to_owned());
         Ok(())
     }
@@ -603,6 +834,11 @@ impl TabModel {
 
     /// Commit the active drag session and apply its drop operation (`FEATURES.md` §3.3).
     pub fn commit_drag(&mut self) -> Result<Option<DropTarget>> {
+        Ok(self.commit_drag_with_payload()?.map(|(_, target)| target))
+    }
+
+    /// Commit the active drag session, returning both its [`DragPayload`] and [`DropTarget`].
+    pub fn commit_drag_with_payload(&mut self) -> Result<Option<(DragPayload, DropTarget)>> {
         let Some(session) = self.drag.take() else {
             return Ok(None);
         };
@@ -612,8 +848,9 @@ impl TabModel {
         let Some(target) = session.target else {
             return Ok(None);
         };
+        let payload = session.payload;
 
-        if let DragPayload::Tab(tab_id) = session.payload {
+        if let DragPayload::Tab(tab_id) = payload {
             match &target {
                 DropTarget::PinSlot(slot) => {
                     if !self.tab(tab_id).is_some_and(|t| t.pinned) {
@@ -647,7 +884,7 @@ impl TabModel {
                 | DropTarget::DetachWindow => {}
             }
         }
-        Ok(Some(target))
+        Ok(Some((payload, target)))
     }
 
     /// Move `id` to `target_index` within its section (pins or loose tabs).
@@ -656,6 +893,10 @@ impl TabModel {
             return Err(CoreError::Invalid(format!("no such tab: {id}")));
         };
         let active_id = self.tabs[self.active].id;
+        let prev_id = self
+            .previous_active
+            .and_then(|idx| self.tabs.get(idx))
+            .map(|t| t.id);
         let entry = self.tabs.remove(from);
         let pin_count = self.tabs.iter().take_while(|t| t.pinned).count();
         let dest = if entry.pinned {
@@ -664,16 +905,50 @@ impl TabModel {
             target_index.max(pin_count).min(self.tabs.len())
         };
         self.tabs.insert(dest, entry);
-        self.restore_active_by_id(active_id);
+        self.restore_active_and_prev_by_id(active_id, prev_id);
         Ok(())
     }
 
-    fn restore_active_by_id(&mut self, active_id: TabId) {
+    fn find_fallback_active_after_hide(&self, hiding_index: usize) -> Option<usize> {
+        let is_eligible = |idx: usize| {
+            idx != hiding_index
+                && self
+                    .tabs
+                    .get(idx)
+                    .is_some_and(|t| !t.put_away && !(t.pinned && t.sleeping))
+        };
+        if self.close_goes_back
+            && let Some(prev) = self.previous_active
+            && is_eligible(prev)
+        {
+            return Some(prev);
+        }
+        ((hiding_index + 1)..self.tabs.len())
+            .find(|&idx| is_eligible(idx))
+            .or_else(|| (0..hiding_index).rev().find(|&idx| is_eligible(idx)))
+    }
+
+    fn nearest_eligible_index(&self, preferred: usize) -> Option<usize> {
+        let is_eligible = |idx: usize| {
+            self.tabs
+                .get(idx)
+                .is_some_and(|t| !t.put_away && !(t.pinned && t.sleeping))
+        };
+        if is_eligible(preferred) {
+            return Some(preferred);
+        }
+        (preferred..self.tabs.len())
+            .find(|&idx| is_eligible(idx))
+            .or_else(|| (0..preferred).rev().find(|&idx| is_eligible(idx)))
+    }
+
+    fn restore_active_and_prev_by_id(&mut self, active_id: TabId, prev_id: Option<TabId>) {
         if let Some(idx) = self.tabs.iter().position(|t| t.id == active_id) {
             self.active = idx;
         } else {
             self.active = self.active.min(self.tabs.len().saturating_sub(1));
         }
+        self.previous_active = prev_id.and_then(|pid| self.tabs.iter().position(|t| t.id == pid));
     }
 }
 
@@ -808,5 +1083,60 @@ mod tests {
             DragSession::classify_page_split_band(920.0, 1000.0),
             Some(SplitDropSide::Right)
         );
+    }
+
+    #[test]
+    fn active_pin_or_group_close_moves_focus_to_loose_tab_and_reuses_newtab() {
+        let mut alloc = TabIdAllocator::new();
+        let mut model = TabModel::new(&mut alloc).expect("model");
+        let pin_id = model.active_tab().id;
+        model.active_tab_mut().url = PageUrl::parse("https://pin.example/").expect("pin url");
+        model.pin_tab(pin_id).expect("pin");
+
+        let loose_id = model
+            .create_tab(&mut alloc, None, "New Tab", false, false)
+            .expect("loose blank");
+        model.tab_mut(loose_id).expect("loose").url =
+            PageUrl::parse("search://newtab").expect("newtab");
+        // Creating another blank tab reuses search://newtab.
+        let reused = model
+            .create_tab(&mut alloc, None, "Again", false, false)
+            .expect("reused");
+        assert_eq!(reused, loose_id);
+
+        // Select the active pin with a simulated engine_tab_id, then close (put down):
+        // pin clears engine_tab_id, sleeps, returns home, and active shifts to loose_id.
+        model.select_tab(pin_id);
+        model.set_engine_tab_id(pin_id, Some(TabId::new(900)));
+        model.tab_mut(pin_id).expect("pin").url =
+            PageUrl::parse("https://pin.example/subpage").expect("subpage");
+        model
+            .close_tab(pin_id, &mut alloc)
+            .expect("put down active pin");
+        let pin = model.tab(pin_id).expect("pin kept");
+        assert!(pin.sleeping);
+        assert_eq!(pin.engine_tab_id, None);
+        assert_eq!(pin.url.as_str(), "https://pin.example/");
+        assert_eq!(model.active_tab().id, loose_id);
+
+        // Group tab active put-away moves focus back to loose_id cleanly.
+        let gid = GroupId::new();
+        let g_id = model
+            .create_tab(
+                &mut alloc,
+                Some(PageUrl::parse("https://group.example/").expect("group")),
+                "Grouped",
+                false,
+                true,
+            )
+            .expect("group tab");
+        model.tab_mut(g_id).expect("g").group = Some(gid);
+        model.set_engine_tab_id(g_id, Some(TabId::new(901)));
+        model.close_tab(g_id, &mut alloc).expect("put away group");
+        let g = model.tab(g_id).expect("g kept");
+        assert!(g.put_away);
+        assert!(g.sleeping);
+        assert_eq!(g.engine_tab_id, None);
+        assert_eq!(model.active_tab().id, loose_id);
     }
 }

@@ -130,6 +130,94 @@ impl PermissionStore {
         false
     }
 
+    /// Clear every saved permission decision for `origin` or return all per-kind decisions for `url`.
+    #[must_use]
+    pub fn decisions_for_url(&self, url: &PageUrl) -> Vec<(PermissionKind, PermissionDecision)> {
+        [
+            PermissionKind::Camera,
+            PermissionKind::Microphone,
+            PermissionKind::Location,
+            PermissionKind::Notifications,
+        ]
+        .into_iter()
+        .map(|kind| {
+            let decision = PermissionKey::for_url(url, kind)
+                .ok()
+                .and_then(|k| self.decisions.get(&k.to_storage_key()).copied())
+                .unwrap_or(PermissionDecision::Ask);
+            (kind, decision)
+        })
+        .collect()
+    }
+
+    /// Return distinct conflicting saved origin spellings (e.g. `https://example.com` vs `https://example.com:443`).
+    #[must_use]
+    pub fn conflicting_origins_for_url(&self, url: &PageUrl) -> Vec<String> {
+        let parsed: Vec<(PermissionKey, PermissionDecision)> = self
+            .decisions
+            .iter()
+            .filter_map(|(k, &d)| PermissionKey::from_storage_key(k).ok().map(|pk| (pk, d)))
+            .collect();
+        let mut out: Vec<String> = Vec::new();
+        for kind in [
+            PermissionKind::Camera,
+            PermissionKind::Microphone,
+            PermissionKind::Location,
+            PermissionKind::Notifications,
+        ] {
+            let Ok(target) = PermissionKey::for_url(url, kind) else {
+                continue;
+            };
+            let canonical = target.canonical_origin();
+            let matching: Vec<&(PermissionKey, PermissionDecision)> = parsed
+                .iter()
+                .filter(|(pk, _)| pk.kind == kind && pk.canonical_origin() == canonical)
+                .collect();
+            if matching.len() >= 2
+                && matching
+                    .iter()
+                    .any(|(pk, d)| *d != matching[0].1 || pk.origin != matching[0].0.origin)
+            {
+                for (pk, _) in matching {
+                    if !out.contains(&pk.origin) {
+                        out.push(pk.origin.clone());
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Resolve a saved port-spelling conflict by keeping only entries whose origin equals `keep_origin`.
+    pub fn resolve_port_conflict(&mut self, url: &PageUrl, keep_origin: &str) -> usize {
+        let mut canonicals = BTreeSet::new();
+        for kind in [
+            PermissionKind::Camera,
+            PermissionKind::Microphone,
+            PermissionKind::Location,
+            PermissionKind::Notifications,
+        ] {
+            if let Ok(pk) = PermissionKey::for_url(url, kind) {
+                canonicals.insert(pk.canonical_origin());
+            }
+        }
+        let keys_to_remove: Vec<String> = self
+            .decisions
+            .keys()
+            .filter(|k| {
+                PermissionKey::from_storage_key(k).is_ok_and(|pk| {
+                    canonicals.contains(&pk.canonical_origin()) && pk.origin != keep_origin
+                })
+            })
+            .cloned()
+            .collect();
+        let removed = keys_to_remove.len();
+        for key in keys_to_remove {
+            self.decisions.remove(&key);
+        }
+        removed
+    }
+
     /// `"Forget choices"` in Settings › Privacy resets every saved origin (`FEATURES.md` §12.3).
     pub fn forget_all_choices(&mut self) -> usize {
         let count = self.decisions.len();
@@ -235,21 +323,81 @@ impl StoreCompositor {
         timestamp_iso: &str,
         space: Option<String>,
     ) {
+        self.on_navigation_committed_with_policy(
+            tab,
+            url,
+            title,
+            timestamp_iso,
+            space,
+            false,
+            true,
+        );
+    }
+
+    /// Record a committed navigation with explicit space-isolation & iCloud export policies.
+    #[allow(clippy::too_many_arguments)]
+    pub fn on_navigation_committed_with_policy(
+        &mut self,
+        tab: TabId,
+        url: PageUrl,
+        title: &str,
+        timestamp_iso: &str,
+        space: Option<String>,
+        isolated_space: bool,
+        allow_icloud_export: bool,
+    ) {
         if !self.allows_durable_writes(tab) {
             return;
         }
-        self.history
-            .record_visit(url.clone(), title, timestamp_iso, false, space);
+        if !isolated_space {
+            self.history
+                .record_visit(url.clone(), title, timestamp_iso, false, space);
+        }
         if matches!(url.scheme(), "http" | "https") {
-            self.handoff_url = Some(url.clone());
-            if !self
-                .icloud_exported_urls
-                .iter()
-                .any(|u| u.identity() == url.identity())
+            if !isolated_space {
+                self.handoff_url = Some(url.clone());
+            }
+            if allow_icloud_export
+                && !self
+                    .icloud_exported_urls
+                    .iter()
+                    .any(|u| u.identity() == url.identity())
             {
                 self.icloud_exported_urls.push(url);
             }
         }
+    }
+
+    /// Whether session persistence may store tabs/state for `tab`.
+    #[must_use]
+    pub fn allows_session_persistence(&self, tab: TabId) -> bool {
+        self.allows_durable_writes(tab)
+    }
+
+    /// Whether an extension with `extension_allowed_in_private` may see/act on `tab`.
+    #[must_use]
+    pub fn allows_extension_access(&self, tab: TabId, extension_allowed_in_private: bool) -> bool {
+        !self.is_agent(tab) && (!self.is_private(tab) || extension_allowed_in_private)
+    }
+
+    /// Whether downloads started from `tab` must stay out of Downloads history.
+    #[must_use]
+    pub fn is_private_download(&self, tab: TabId) -> bool {
+        self.is_private(tab)
+    }
+
+    /// Record a closed tab through the compositor gate (`AGENTS.md` §9).
+    pub fn record_recently_closed(
+        &mut self,
+        item: crate::history::RecentlyClosedItem,
+        private_tab: bool,
+    ) {
+        self.history.record_recently_closed(item, private_tab);
+    }
+
+    /// Clear Handoff advertisement (e.g. when switching into a private or isolated tab).
+    pub fn clear_handoff(&mut self) {
+        self.handoff_url = None;
     }
 
     /// Record a favicon update through the compositor gate (`AGENTS.md` §9).
@@ -312,6 +460,19 @@ mod tests {
         let norm_tab = TabId::new(11);
         comp.register_tab(priv_tab, true, false);
         comp.register_tab(norm_tab, false, false);
+        let isolated_tab = TabId::new(12);
+        comp.register_tab(isolated_tab, false, false);
+        comp.on_navigation_committed_with_policy(
+            isolated_tab,
+            PageUrl::parse("https://work-isolated.example/doc").expect("iso url"),
+            "Isolated Work Doc",
+            "2026-11-21T09:49:00Z",
+            Some("space-own".into()),
+            true,
+            false,
+        );
+        assert!(comp.history.visits().is_empty());
+        assert!(comp.handoff_url.is_none());
 
         let secret_url = PageUrl::parse("https://bank.example.com/account").expect("url");
         let icon_url = PageUrl::parse("https://bank.example.com/favicon.ico").expect("icon");
@@ -367,6 +528,35 @@ mod tests {
         assert_eq!(
             comp.evaluate_permission(norm_tab, &secret_url, PermissionKind::Camera),
             PermissionDecision::Ask
+        );
+
+        comp.permissions
+            .insert_raw_storage_key(
+                "capture.https://bank.example.com|camera",
+                PermissionDecision::Allow,
+            )
+            .expect("default port");
+        comp.permissions
+            .insert_raw_storage_key(
+                "capture.https://bank.example.com:443|camera",
+                PermissionDecision::Refuse,
+            )
+            .expect("explicit port");
+        assert_eq!(
+            comp.permissions
+                .conflicting_origins_for_url(&secret_url)
+                .len(),
+            2
+        );
+        assert_eq!(
+            comp.permissions
+                .resolve_port_conflict(&secret_url, "https://bank.example.com"),
+            1
+        );
+        assert!(
+            comp.permissions
+                .conflicting_origins_for_url(&secret_url)
+                .is_empty()
         );
     }
 }
