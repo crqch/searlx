@@ -252,11 +252,8 @@ impl WebKitGtkEngine {
         let events_clone = events.clone();
         let handler_clone = internal_handler.clone();
 
-        runtime::run_on_gtk_thread(mode, move || {
-            let inner =
-                webkit_engine::InnerWebKitEngine::new(data_root, events_clone, handler_clone)?;
-            runtime::register_engine(id, inner);
-            Ok(())
+        runtime::create_and_register_engine(mode, id, move || {
+            webkit_engine::InnerWebKitEngine::new(data_root, events_clone, handler_clone)
         })?;
 
         Ok(Self {
