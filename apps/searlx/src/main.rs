@@ -10,6 +10,9 @@
 use anyhow::{Context, Result};
 use searlx_core::ai_agents_bench::BenchWorldConfig;
 
+#[cfg(target_os = "linux")]
+mod gtk_shell;
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -56,7 +59,7 @@ fn main() -> Result<()> {
 
     #[cfg(target_os = "linux")]
     if !use_gpui_shell {
-        searlx_engine_linux::browser::run_gtk_browser(&initial_urls)
+        gtk_shell::run_gtk_browser(&initial_urls)
             .map_err(|e| anyhow::anyhow!(e))
             .context("the Linux WebKitGTK browser failed to start")?;
         return Ok(());

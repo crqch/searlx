@@ -16,7 +16,16 @@ searlx-platform.workspace = true
 searlx-ui.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
+gio = "0.22"
+glib = "0.22"
+gtk = "0.19"
+serde.workspace = true
+serde_json.workspace = true
+url.workspace = true
 searlx-engine-linux = { path = "../../crates/searlx-engine-linux" }
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

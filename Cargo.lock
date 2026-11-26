@@ -4972,13 +4972,20 @@ name = "searlx"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "gio",
+ "glib",
+ "gtk",
  "searlx-core",
  "searlx-engine",
  "searlx-engine-linux",
  "searlx-platform",
  "searlx-ui",
+ "serde",
+ "serde_json",
+ "tempfile",
  "tracing",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
