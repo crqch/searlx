@@ -2,12 +2,12 @@
 
 **Spec:** [FEATURES.md](FEATURES.md)
 **Rules:** [AGENTS.md](AGENTS.md)
-**Status:** Phase 0 — in progress
-**Last updated:** 2026-11-21
+**Status:** Phase 0 — in progress (Linux shell & core controller active; macOS/Windows hardware gates open)
+**Last updated:** 2026-11-26
 
 This is the live tracker. Update it in the same commit as the work. A task is done when its **Done when** line is true on every named platform, not when it compiles.
 
-> Note: this checkout currently contains only the planning documents. The original Swift source is not present; `FEATURES.md` is the behavioural source of truth. If the old app is restored, treat it as read-only reference, not as code to port file-by-file.
+> Note: the original Swift source is not present in this checkout; `FEATURES.md` is the behavioural source of truth. If the old app is restored, treat it as read-only reference, not as code to port file-by-file.
 
 ## Legend
 
@@ -40,15 +40,14 @@ Gates count as tasks. The "Now" section mirrors six Phase 0 items; they are not 
 
 ## Now
 
-Current focus (status lives in Phase 0 below; this is only the order):
+Current focus (status lives in each phase below; this is only the order):
 
-1. **P0-07** — Hard interactions prototype on the GTK shell.
-2. **P0-08** — Performance baseline with 1/10/30 tabs.
-3. **P0-03/P0-04** — macOS and Windows embedding (need hardware).
-4. **P0-05** — repeat the Linux checks on an unlocked X11 display.
-5. **P0-G** — architecture gate; blocked until the rows above have evidence.
+1. **P0-03 / P0-04 / P1-04 / P1-05** — Wire native `objc2-web-kit` (`WkWebViewEngine`) and `windows-rs` WebView2 (`WebView2Engine`) bindings on physical macOS and Windows hardware.
+2. **P0-07 / P0-08** — Measure macOS and Windows hard-interaction latencies and 1/10/30-tab baselines to compare against the Linux WebKitGTK X11 baseline.
+3. **P1-15 / P5-11** — Human dogfooding on an unlocked Fedora/Ubuntu desktop session and on macOS/Windows hardware.
+4. **P0-G** — Architecture gate; blocked until macOS and Windows hardware evidence exists.
 
-**Next gate:** P0-G — architecture confirmed. Do not start Phase 1 until P0-09 and P0-G are done. P0-09 is written, but P0-G is blocked on macOS/Windows evidence and real Linux input/frame-rate measurements.
+**Next gate:** P0-G — architecture confirmed. Linux GTK3 + WebKitGTK (`P5-01`) and platform-independent `BrowserController` / domain work proceed per ADR-0002 while P0-G stays `[!]` pending physical macOS/Windows evidence.
 
 ---
 
@@ -59,22 +58,22 @@ Current focus (status lives in Phase 0 below; this is only the order):
 - [~] **P0-01 — Scaffold the Rust workspace `[all]`**
   Create the workspace from AGENTS.md §3: `searlx-core`, `searlx-engine`, `searlx-ui`, `searlx-platform`, `searlx-testkit`, `apps/searlx`, `docs/adr`, `docs/spike`. Add `rust-toolchain.toml`, `rustfmt.toml`, `.gitignore`, CI skeleton.
   **Done when:** `cargo check --workspace` passes; `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings` pass; an empty gpui app launches.
-  **Notes:** Workspace, all eight crates, toolchain pin, fmt config and the gpui shell exist. `cargo check`, `fmt --check`, `clippy -D warnings` and `cargo test --workspace` pass on Linux. `target/debug/searlx` stays up with the shell. The vendored `xattr` patch is needed because current `libc` dropped the Linux `ENOATTR` alias used by gpui's HTTP client; see `vendor/xattr/README.searlx.md`. CI workflow is written but has not run on GitHub yet. macOS/Windows launch still needs a machine.
+  **Notes:** Workspace, all nine workspace members (eight crates plus `apps/searlx`), `rust-toolchain.toml`, `rustfmt.toml`, `searlx_core::BrowserController` (`controller.rs`), `searlx_testkit::ControllerDriver`, real `WebKitGtkEngine` (`crates/searlx-engine-linux`), GTK3 + WebKitGTK shell (`apps/searlx/src/gtk_shell/`), and `gpui` shell (`crates/searlx-ui`, launched via `--gpui-shell`) exist. `cargo check`, `fmt --check`, `clippy -D warnings`, and `cargo test --workspace` pass on Linux; `searlx --probe` runs headlessly. The vendored `xattr` patch is needed because current `libc` dropped the Linux `ENOATTR` alias used by gpui's HTTP client; see `vendor/xattr/README.searlx.md`. CI workflow is written but has not run on GitHub yet. macOS/Windows launch still needs physical machines.
 
 - [~] **P0-02 — gpui window shell `[all]`**
   One window, hidden title bar, 1180×780 default, 640×420 minimum, a row of 2 fake tabs, an address field, and a page placeholder. No real engine yet.
   **Done when:** it opens on macOS, Windows, and Linux (X11); tab click switches; field takes IME/emoji; reduce-motion and light/dark are respected.
-  **Notes:** The shell is in `crates/searlx-ui` (`app.rs`, `field.rs`, `theme.rs`, `metrics.rs`): 1180×780, 640×420 minimum, two fake tabs, close/new-tab, one address entity with grapheme-aware editing, selection, clipboard and marked-text (IME composition) support, light/dark palette from the window appearance, and an overlay chip over the page placeholder. Linux launch verified; manual IME/emoji and macOS/Windows checks are still open. There are no animations yet, so Reduce Motion is respected trivially; motion constants are in `metrics.rs` for when they arrive.
+  **Notes:** Refactored in `crates/searlx-ui` (`app.rs`, `field.rs`, `theme.rs`, `metrics.rs`, `a11y.rs`): `Shell` and `ShellModel` drive `searlx_core::BrowserController` directly via `AppCommand` and `UiSnapshot` with no fake-tab stub or concrete-engine coupling (1180×780 default, 640×420 minimum, floating `Ctrl+L`/`Ctrl+T`/`Ctrl+K` overlays, Site Card, Space switcher, Find pill, Split View stage, grapheme-aware `AddressField` with selection, clipboard, and marked-text IME composition, light/dark/high-contrast palette, and `AccessibilityTree` / `FocusController`). Launches via `searlx --gpui-shell`. Linux UI unit tests pass; manual IME/emoji and physical macOS/Windows launch checks are still open.
 
 - [!] **P0-03 — macOS WKWebView embed `[mac]`**
   Embed a real `WKWebView` as a native child of the gpui window via `objc2`/`objc2-web-kit`. Load two tabs; keep each page alive across switching. Place a gpui overlay above the page.
   **Done when:** pages load, tab switching does not reload, the overlay is visible and interactive above the page, input/focus is correct, and resizing tracks without flicker.
-  **Notes:** `WkWebViewEngine` contract and capabilities are implemented in `crates/searlx-engine-macos/src/lib.rs`. **Blocked on:** physical macOS machine (this environment is Linux-only). **Owner:** project lead. **Verification:** run `cargo test -p searlx-engine-macos` and the `docs/spike/phase-0.md` §12 macOS rows on an Apple Silicon Mac.
+  **Notes:** `WkWebViewEngine` capability descriptor and honest `EngineError::NotSupported` stub are in `crates/searlx-engine-macos/src/lib.rs` (no `FakeEngine` delegation). **Blocked on:** physical macOS machine (this environment is Linux-only). **Owner:** project lead. **Verification:** wire native `objc2-web-kit` bindings, run `cargo test -p searlx-engine-macos`, and run the `docs/spike/phase-0.md` §12 macOS rows on an Apple Silicon Mac.
 
 - [!] **P0-04 — Windows WebView2 embed `[win]`**
   Embed WebView2 via `windows-rs` or `wry` behind the engine trait. Load two tabs; keep them alive. Place a gpui overlay above the page.
   **Done when:** same as P0-03 on Windows 11; note whether the WebView2 child window covers gpui overlays and what workaround is needed; record input latency.
-  **Notes:** `WebView2Engine` contract, per-(profile, space) user data folder resolver, and capabilities are implemented in `crates/searlx-engine-windows/src/lib.rs`. **Blocked on:** physical Windows 11 machine (this environment is Linux-only). **Owner:** project lead. **Verification:** run `cargo test -p searlx-engine-windows` and the `docs/spike/phase-0.md` §12 Windows 11 HWND overlay checks.
+  **Notes:** `WebView2Engine` capability descriptor, per-(profile, space) user data folder resolver (`webview2_user_data_folder`), and honest `EngineError::NotSupported` stub are in `crates/searlx-engine-windows/src/lib.rs` (no `FakeEngine` delegation). **Blocked on:** physical Windows 11 machine (this environment is Linux-only). **Owner:** project lead. **Verification:** wire native `windows-rs` WebView2 bindings, run `cargo test -p searlx-engine-windows`, and run the `docs/spike/phase-0.md` §12 Windows 11 HWND overlay checks.
 
 - [x] **P0-05 — Linux WebKitGTK X11 spike `[linux]`**
   Embed WebKitGTK in a gpui window on X11/XWayland. Load a real page. Test overlay, focus, resize, IME, video.
@@ -139,52 +138,52 @@ Current focus (status lives in Phase 0 below; this is only the order):
 - [x] **P1-03 — Engine trait and events `[all]`**
   Finalise `Engine`, `TabOptions`, `EngineEvent`, `Capabilities`, `DataStoreHandle`, `ScriptWorld`, `InjectAt`, `FindOptions`, `FindState`. Add a fake engine for tests.
   **Done when:** `searlx-testkit` can drive the fake through create/load/back/forward/close and assert the event stream.
-  **Notes:** `searlx-engine` defines the complete contract (`Engine`, `TabOptions`, `EngineEvent`, `Capabilities`, `DataStoreHandle`, `DataKinds`, `ScriptWorld`, `InjectAt`, `FindOptions`, `FindState`, `PermissionKind`, `DialogKind`, `NewWindowDisposition`, `Rect`, `Image`) and `FakeEngine` records calls and emits the full navigation/history/media/script event stream. `searlx-testkit` drives `lifecycle` and verifies a redacted golden event transcript (`crates/searlx-testkit/tests/fixtures/lifecycle.transcript`).
+  **Notes:** `searlx-engine` defines the complete contract (`Engine`, `TabOptions`, `EngineEvent`, `Capabilities`, `DataStoreHandle`, `DataKinds`, `ScriptWorld`, `InjectAt`, `FindOptions`, `FindState`, `PermissionKind`, `DialogKind`, `NewWindowDisposition`, `Rect`, `Image`) and `FakeEngine` records calls and emits the full navigation/history/media/script event stream for tests. `searlx-core::BrowserController` (`controller.rs`) owns the engine-independent command/directive/snapshot state machine, and `searlx-testkit::ControllerDriver` (`driver.rs`, `tests/controller_integration.rs`) drives `BrowserController` against `FakeEngine` alongside `lifecycle` and the redacted golden event transcript (`crates/searlx-testkit/tests/fixtures/lifecycle.transcript`).
 
 - [!] **P1-04 — macOS backend `[mac]`**
   WKWebView behind `Engine`: create/close/navigate/back/forward/reload/stop/eval/inject/set_bounds/visible/focus/snapshot/find/zoom/mute/data store/permissions/downloads/events.
   **Done when:** contract tests pass against real WKWebView; two tabs switch without reload; private store is ephemeral.
-  **Notes:** `crates/searlx-engine-macos/src/lib.rs` implements `WkWebViewEngine` (`searlx_engine::Engine`) and passes tab switching without reload and ephemeral store isolation tests. **Blocked on:** macOS hardware for native `objc2-web-kit` view binding. **Owner:** project lead. **Verification:** run `cargo test -p searlx-engine-macos` on macOS 15+.
+  **Notes:** `crates/searlx-engine-macos/src/lib.rs` defines `target_capabilities()` and `WkWebViewEngine` implementing `searlx_engine::Engine` as an honest `EngineError::NotSupported` stub on non-macOS hosts (and until native `objc2-web-kit` view bindings are wired on macOS; no delegation to `FakeEngine`). Unit tests verify `target_capabilities()` and honest `NotSupported` returns. **Blocked on:** physical macOS hardware for native `objc2-web-kit` view binding. **Owner:** project lead. **Verification:** wire `objc2-web-kit`, run `cargo test -p searlx-engine-macos`, and run contract tests on macOS 15+.
 
 - [!] **P1-05 — Windows backend `[win]`**
   WebView2 behind `Engine`, same contract. User data folder per profile/space; ephemeral profile for private tabs.
   **Done when:** contract tests pass on Windows 11; two tabs switch without reload; private profile leaves no data.
-  **Notes:** `crates/searlx-engine-windows/src/lib.rs` implements `WebView2Engine` (`searlx_engine::Engine`) and `webview2_user_data_folder` (isolating `profile-<uuid>/space-<uuid>` and returning `None` for ephemeral private tabs). **Blocked on:** Windows 11 hardware for native WebView2 Evergreen binding. **Owner:** project lead. **Verification:** run `cargo test -p searlx-engine-windows` on Windows 11.
+  **Notes:** `crates/searlx-engine-windows/src/lib.rs` defines `target_capabilities()`, `webview2_user_data_folder` (isolating `profile-<uuid>/space-<uuid>` and returning `None` for ephemeral InPrivate tabs), and `WebView2Engine` implementing `searlx_engine::Engine` as an honest `EngineError::NotSupported` stub on non-Windows hosts (and until native `windows-rs` WebView2 bindings are wired on Windows; no delegation to `FakeEngine`). Unit tests verify capability flags, folder isolation, and honest `NotSupported` returns. **Blocked on:** physical Windows 11 hardware for native WebView2 Evergreen binding. **Owner:** project lead. **Verification:** wire `windows-rs` WebView2, run `cargo test -p searlx-engine-windows`, and run contract tests on Windows 11.
 
 - [~] **P1-06 — Tab model and row `[all]`**
   Tab state, active tab, pinned flag, title/icon, loading, audio, sleep placeholder. Side and top layouts, icons-only, fold. Use one drag session.
   **Done when:** create/close/reorder/pin/unpin works on macOS and Windows; a tab drag is smooth at 60+ fps.
-  **Notes:** `crates/searlx-core/src/tabs.rs` implements `TabEntry`, `TabModel` (blank-tab reuse on `⌘T`, pin put-down and group put-away on `⌘W`, pin/unpin across the boundary, `Put to Sleep` guard, `⌘S` fold and fold-to-icons), and the single unified `DragSession` state machine (`DragPayload`, `DropTarget`, 5 pt travel threshold, 12 pt detach slack, `max(120 pt, 24%)` split drop band). Wired into `searlx-ui`. Needs macOS/Windows physical verification.
+  **Notes:** `crates/searlx-core/src/tabs.rs` implements `TabEntry`, `TabModel` (blank-tab reuse on `⌘T`, pin put-down and group put-away on `⌘W`, pin/unpin across the boundary, `Put to Sleep` guard, `⌘S` fold and fold-to-icons), and the single unified `DragSession` state machine (`DragPayload`, `DropTarget`, 5 pt travel threshold, 12 pt detach slack, `max(120 pt, 24%)` split drop band). Orchestrated by `BrowserController` (`controller.rs`) and rendered in both the Linux GTK3 shell (`apps/searlx/src/gtk_shell/sidebar.rs`, `stage.rs`) and the refactored `crates/searlx-ui` (`app.rs`). Needs macOS/Windows physical verification.
 
 - [x] **P1-07 — Address field and parsing `[all]`**
   Port FEATURES.md §4.2 parsing rules, Return/⌘Return/⇧⌘Return, completion, suggestions from history/bookmarks/open tabs, site chip, commands. Invalid input shakes.
   **Done when:** parser unit tests mirror the spec; manual cases: `localhost:3000`, `~/file`, `example.com`, `hello world`, `mailto:`, `[::1]:3000`, look-alike hosts.
-  **Notes:** `crates/searlx-core/src/address.rs` implements all `FEATURES.md` §4.2–4.4 rules: whitespace/single-word search vs bare host classification, `localhost`/`*.localhost`/`*.local`/`[::1]`/`127.0.0.1`/private IPv4 → `http://`, `0.0.0.0` → `http://localhost`, letter-TLD ≥2 check (dotted version numbers like `1.2.3` rejected as invalid), `/path` and `~/path` file existence check, `@` and unsupported scheme refusal (`mailto:`, `javascript:`), IDN punycode look-alike detector (`inspect_host_lookalike`), `SubmitDisposition` (`Return`/`⌘Return`/`⇧⌘Return`), 9 search engines + host-preserving template expansion, 16 built-in site searches (`Tab`-to-search & keywords), inline grey completion, and ordered suggestion builder (site offers, open tabs, frecency history, bookmarks/slips, known sites, commands, search fallback). Wired into `searlx-ui`.
+  **Notes:** `crates/searlx-core/src/address.rs` implements all `FEATURES.md` §4.2–4.4 rules: whitespace/single-word search vs bare host classification, `localhost`/`*.localhost`/`*.local`/`[::1]`/`127.0.0.1`/private IPv4 → `http://`, `0.0.0.0` → `http://localhost`, letter-TLD ≥2 check (dotted version numbers like `1.2.3` rejected as invalid), `/path` and `~/path` file existence check, `@` and unsupported scheme refusal (`mailto:`, `javascript:`), IDN punycode look-alike detector (`inspect_host_lookalike`), `SubmitDisposition` (`Return`/`⌘Return`/`⇧⌘Return`), 9 search engines + host-preserving template expansion, 16 built-in site searches (`Tab`-to-search & keywords), inline grey completion, and ordered suggestion builder (site offers, open tabs, frecency history, bookmarks/slips, known sites, commands, search fallback). Wired through `BrowserController` into `crates/searlx-ui` and `apps/searlx/src/gtk_shell/overlays.rs`.
 
 - [x] **P1-08 — Session and restore `[all]`**
   Write/read session and windows files. Restore tabs asleep; active tab wakes; window frames; fresh-start mode; quarantine.
   **Done when:** quit/relaunch restores tabs without loading every page; a 30-tab session opens fast; corrupt session is quarantined.
-  **Notes:** `crates/searlx-core/src/session.rs` implements `restore_session`, `save_window_session`, and `save_additional_windows`. Non-active tabs always restore asleep (`sleeping=true`, `should_load_now=false`) while only the active tab wakes; a 30-tab session restores in <10 ms with 1 awake tab. Private tabs are stripped before saving. Fresh-start mode (`RestoreMode::FreshStart`) keeps pins asleep and replaces loose tabs with one blank tab. Corrupt `session.json` and `windows.json` quarantine intact and fall back to `1180×780`.
+  **Notes:** `crates/searlx-core/src/session.rs` implements `restore_session`, `save_window_session`, and `save_additional_windows`. Non-active tabs always restore asleep (`sleeping=true`, `should_load_now=false`) while only the active tab wakes; a 30-tab session restores in <10 ms with 1 awake tab. Private tabs are stripped before saving. Fresh-start mode (`RestoreMode::FreshStart`) keeps pins asleep and replaces loose tabs with one blank tab. Corrupt `session.json` and `windows.json` quarantine intact and fall back to `1180×780`. Driven end-to-end by `BrowserController::open` (`RestoreMode::Normal`) and `AppCommand::SaveSession` in `apps/searlx/src/gtk_shell/mod.rs` and `crates/searlx-ui`.
 
 - [x] **P1-09 — Settings shell `[all]`**
   Settings as a tab (`search://settings`), 11 pages, search field, typed settings with defaults. Start with General/Appearance/Tabs/Browsing/Privacy.
   **Done when:** settings persist; changing one redraws the relevant UI; search finds rows and synonyms.
-  **Notes:** `crates/searlx-core/src/settings.rs` defines the typed `Settings` model with all `FEATURES.md` §21 defaults (including the inverted `sites.keep` flag for cross-site tracking prevention and dormant `ai_shipped=false`), atomic persistence via `DataStore`, `SettingsPage` covering all 11 pages (`search://settings/<slug>`), and `search_settings` matching labels, keys, and synonyms while marking rows under disabled parent switches as `dimmed_by_parent=true`.
+  **Notes:** `crates/searlx-core/src/settings.rs` defines the typed `Settings` model with all `FEATURES.md` §21 defaults (including the inverted `sites.keep` flag for cross-site tracking prevention and dormant `ai_shipped=false`), atomic persistence via `DataStore`, `SettingsPage` covering all 11 pages (`search://settings/<slug>`), and `search_settings` matching labels, keys, and synonyms while marking rows under disabled parent switches as `dimmed_by_parent=true`. Wired through `BrowserController` (`controller.rs`), interactive `search://settings` in `apps/searlx/src/gtk_shell/internal_pages.rs`, and `crates/searlx-ui`.
 
 - [x] **P1-10 — Theme, metrics, icons `[all]`**
   Light/dark/system palette, metrics module, tab glyphs (letters/favicons), high contrast, reduce motion. No magic numbers scattered.
   **Done when:** appearance matches the design intent on both OSes; text scales; icons render at 1x/2x.
-  **Notes:** `crates/searlx-ui/src/theme.rs` and `metrics.rs` provide `Palette::for_theme_with_contrast` (light/dark/system + `tabs.highContrast`), `SpaceTint` chrome washes, `tab_glyph_letter`, `motion::duration_ms` (collapsing to `0` under Reduce Motion), `scaled_pt` text scaling (`0.75..=2.5`), and `icon_device_px` for 1x/2x/HiDPI icon sizing.
+  **Notes:** `crates/searlx-ui/src/theme.rs` and `metrics.rs` provide `Palette::for_theme_with_contrast` (light/dark/system + `tabs.highContrast`), `SpaceTint` chrome washes, `tab_glyph_letter`, `motion::duration_ms` (collapsing to `0` under Reduce Motion), `scaled_pt` text scaling (`0.75..=2.5`), and `icon_device_px` for 1x/2x/HiDPI icon sizing; mirrored in `apps/searlx/src/gtk_shell/theme.rs` for Linux GTK3.
 
 - [x] **P1-11 — Command and shortcut layer `[all]`**
   One command registry, default keys, user overrides, menu/action routing, extension commands later. `⌘S` folds, does not save.
   **Done when:** every Phase 1 action is reachable by keyboard and menu; conflicts are rejected.
-  **Notes:** `crates/searlx-core/src/commands.rs` defines `CommandId`, `MenuCategory`, `KeyModifiers`, `KeyChord`, and `CommandRegistry` covering every `FEATURES.md` §22 shortcut (`⌘S` bound to `ToggleSidebar`, `SavePage` unbound, `⌘.` bound to `StopLoading`). User overrides reject reserved chords (`⌘C/V/X/A/Z`, `⌃⌘F`) and duplicate assignments with `ShortcutConflictError`. Extension commands register via `register_extension_command`.
+  **Notes:** `crates/searlx-core/src/commands.rs` defines `CommandId`, `MenuCategory`, `KeyModifiers`, `KeyChord`, and `CommandRegistry` covering every `FEATURES.md` §22 shortcut (`⌘S` bound to `ToggleSidebar`, `SavePage` unbound, `⌘.` bound to `StopLoading`). User overrides reject reserved chords (`⌘C/V/X/A/Z`, `⌃⌘F`) and duplicate assignments with `ShortcutConflictError`. Extension commands register via `register_extension_command`. Routed through `BrowserController` (`AppCommand`) across `crates/searlx-ui` and `apps/searlx/src/gtk_shell`.
 
 - [x] **P1-12 — Import existing Search data `[all]`**
   Import the old app's session/history/bookmarks/pins/spaces/hidden/styles files into `searlx-core`. No browser imports yet.
   **Done when:** a user can point at an old Application Support folder and get their tabs/pins/bookmarks in the new app.
-  **Notes:** `crates/searlx-core/src/import.rs` implements `import_search_directory` with `AGENTS.md` §9 hostile-file checks (`symlink_metadata`, `O_NOFOLLOW`, canonical path confinement, 64 MiB cap), all-or-nothing in-memory staging, asleep tab restoration, idempotent bookmark/history/pin/space/hidden/style merging, and unit tests for normal and symlink-attack directories.
+  **Notes:** `crates/searlx-core/src/import.rs` implements `import_search_directory` with `AGENTS.md` §9 hostile-file checks (`symlink_metadata`, `O_NOFOLLOW`, canonical path confinement, 64 MiB cap), all-or-nothing in-memory staging, asleep tab restoration, idempotent bookmark/history/pin/space/hidden/style merging, and unit tests for normal and symlink-attack directories. Exposed via `BrowserController` and interactive `search://import` (`apps/searlx/src/gtk_shell/internal_pages.rs`).
 
 - [~] **P1-13 — Packaging skeleton `[mac,win]`**
   macOS `.app` bundle + ad-hoc signing; Windows `.exe` + WebView2 runtime check; dev run command. No notarization yet.
@@ -524,7 +523,7 @@ Current focus (status lives in Phase 0 below; this is only the order):
 - [x] **P5-01 — Execute ADR-0002 `[linux]`**
   Implement the chosen Linux engine path: WebKitGTK X11/XWayland, CEF OSR, or GTK-native shell. Record why.
   **Done when:** a real page loads, overlays work, input/IME is usable, and the app starts on a current Fedora/Ubuntu.
-  **Notes:** `crates/searlx-engine-linux/src/lib.rs` implements `WebKitGtkEngine` (`searlx_engine::Engine`) and `crates/searlx-engine-linux/src/bin/interactions.rs` provides the GTK-native shell verified on X11 (`Xwayland` and `Xvfb :5` with `xdotool`): real page load, overlay popover, tab drag, split resize, IME/Compose/emoji, and 60 fps scroll/video playback all pass (`ADR-0002`).
+  **Notes:** `crates/searlx-engine-linux/` implements the real `WebKitGtkEngine` (`lib.rs`, `webkit_engine.rs`, `runtime.rs`, `filters.rs` with synchronous worker/main-thread teardown eliminating the atexit segfault, passing `webkitgtk_contract` and `gtk_main_thread` tests on X11 and returning honest errors without a display). `apps/searlx/src/gtk_shell/` (`mod.rs`, `actions.rs`, `engine_bridge.rs`, `internal_pages.rs`, `overlays.rs`, `sidebar.rs`, `stage.rs`, `theme.rs`) implements the Search-faithful GTK3 + WebKitGTK shell driven by `searlx_core::BrowserController`: no permanent toolbar, floating `Ctrl+L` address overlay, Site Card popover, 2–4 pane Split View, resizable Side Panel, interactive CSP-hardened `search://` pages, `Ctrl+F` find pill, Peek, Tab Switcher, and asleep session restore + `SaveSession` on exit. `apps/searlx/src/main.rs` routes Linux default launch directly to `gtk_shell::run_gtk_browser` (`--probe`/`SEARCH_PROBE` runs headlessly; `--gpui-shell` launches `searlx-ui`). Phase 0 binaries (`bin/spike.rs`, `bin/bench.rs`, `bin/interactions.rs`) remain in `searlx-engine-linux` for `docs/spike/phase-0.md` reproducibility (`ADR-0002`).
 
 - [x] **P5-02 — Linux packaging `[linux]`**
   Flatpak (preferred), AppImage, .deb. WebKitGTK runtime dependency and version floor documented.
@@ -559,7 +558,7 @@ Current focus (status lives in Phase 0 below; this is only the order):
 - [~] **P5-08 — Release candidate `[all]`**
   Feature freeze, bug bash, docs, privacy page, changelog, support matrix.
   **Done when:** a release candidate passes the full manual matrix on each OS.
-  **Notes:** `README.md` (with the per-OS support matrix), `docs/PRIVACY.md`, and `CHANGELOG.md` are written and committed. Full manual matrix on physical macOS and Windows machines remains open.
+  **Notes:** `README.md` (with the per-OS support matrix and updated workspace layout), `docs/PRIVACY.md`, and `CHANGELOG.md` are written and updated for the rewritten controller/GTK-shell architecture. Full manual matrix on physical macOS and Windows machines remains open.
 
 - [!] **P5-09 — 1.0 release `[all]`**
   Sign, notarize/package, publish, update feed, rollback plan.
@@ -640,8 +639,8 @@ Create `docs/adr/NNNN-title.md` for each. Status: proposed/accepted/superseded.
 
 ## Blockers
 
-- **P0-03 / P0-04 / P0-G — no macOS or Windows machine in this environment.** The code and docs are ready; the embedding, overlay, focus, and resize checks need real hardware. Owner: project lead. See `docs/spike/phase-0.md` §12 for the exact steps.
-- **P0-05 / P0-07 / P0-08 — the Linux session is locked by `swaylock`.** Programmatic GTK events and page snapshots work; real pointer, keyboard, IME, video, and frame-rate checks need an unlocked display. Owner: whoever has the session.
+- **P0-03 / P0-04 / P1-04 / P1-05 / P0-G — no macOS or Windows machine in this environment.** The core controller, capability descriptors, and honest `EngineError::NotSupported` stubs are ready; native `objc2-web-kit` / `windows-rs` bindings plus embedding, overlay, focus, and resize checks need real hardware. Owner: project lead. See `docs/spike/phase-0.md` §12 for the exact steps.
+- **P1-15 / P5-11 — interactive desktop dogfooding (`swaylock` / unlocked session).** Automated X11 `Xvfb`/`Xvnc` tests (`webkitgtk_contract`, `gtk_main_thread`) and live GTK shell smoke runs work cleanly; multi-day human dogfooding on unlocked Fedora/Ubuntu, macOS, and Windows sessions remains open. Owner: project lead.
 - **Subagents — OpenCode Go monthly usage limit reached / Insufficient balance.** Delegation to `opencode-go/deepseek-v4.1-flash` failed before doing work; the work continues directly. This is a tooling blocker, not a product decision.
 
 ## Progress log
@@ -662,6 +661,11 @@ Create `docs/adr/NNNN-title.md` for each. Status: proposed/accepted/superseded.
 - **2026-11-21** — P2-20, P2-21, P3-01..P3-08 done. Added `searlx_ui::a11y` (`FocusController`, `AccessibilityTree`, keyboard focus ring traversal), `searlx_testkit::bench` (`PerformanceBudget` CI harness verifying <25 ms 30-tab cold restore with 1 awake tab and ~5 GiB memory savings vs 30 live WebKitGTK processes), `searlx_core::spaces_profiles` (`SpacesManager`, `ProfilesManager`, `MergedProfileWindowGroup`), `searlx_core::pins_and_folders` (`PinsRegistry`, 3-level `PinFoldersManager`, 2 MiB/12-item credential-less RSS/Atom parser), and `searlx_core::groups_splits_switcher` (`TabGroupsManager` with `⇧⌘T` group reopen, 2–4 pane `SplitWorkspace`, and 150 ms `TabSwitcherSession` with moon cards).
 - **2026-11-21** — P3-09..P3-14, P3-16..P3-18 done. Added `searlx_core::peek_small_float` (`PeekSession` preserving exact opener scroll/focus on Escape and promoting without reload, `SmallWindowsManager` with cascade/`⌘O`/`>60%` screen check/Escape rules, and `FloatingVideoController` with corner flicks, system-PiP fallback, and private-tab policy), `searlx_core::gestures_lifecycle` (`SwipeHistoryGesture` yielding to horizontal carousels, `SpaceSwipeGesture`, `FoldedSidebarEdgePeek`, `evaluate_tab_lifecycle` with whole-or-none split auto-close & archive, and `WindowTwinsCoordinator`), and `searlx_core::sync_panel_launcher_routes` (17-setting `FolderSync` with 365-day tombstones & mass-deletion guard, `SidePanelController`, `LauncherController`, `SpaceRouter`, and RFC 6068 `MailtoMessage` webmail composer).
 - **2026-11-21** — P4-03, P4-07..P4-09, P4-12..P4-14, P5-01..P5-07, C-01..C-07 done; P5-08 docs/privacy/changelog landed. Added `searlx_core::extensions_security` (CRX3 magic/header/key-prefix/proof verifier, path-derived unpacked IDs, path confinement, permission diff prompts, private-tab isolation, and per-OS `ExtensionPlatformGate`), `searlx_core::ai_agents_bench` (dormant `AI_SHIPPED_DEFAULT=false`, 40k-node/24k-char/400-link fenced page context, stray URL/email detector, Claude Code allowlist, mouse-only consent, `p1.s1.e1` stale handles, password/card/OTP & URL query redaction, immediate `Stop`, and `SEARCH_PROBE` isolated test worlds), `searlx_engine_linux::WebKitGtkEngine` & `LinuxFeatureMatrix`, `searlx_platform::linux` (Secret Service, `libnotify`, ScreenSaver, XDG `.desktop` & Flatpak manifests), `searlx_core::fuzz_and_hardening` (120 Hz frame budget, `INTERNAL_PAGE_CSP`, IPC validation, and 5,000+ input CI fuzz suite), and `README.md`, `docs/PRIVACY.md`, and `CHANGELOG.md`.
+- **2026-11-26** — Architecture rewrite & Wave 1/Wave 2 integration landed across controller, engines, and shells:
+  - Added platform-independent `searlx_core::BrowserController` state machine (`controller.rs`) coordinating every domain manager behind `AppCommand`, `EngineDirective`, `EngineEvent`, and read-only `UiSnapshot` projections, paired with `searlx_testkit::ControllerDriver` (`driver.rs`) and `tests/controller_integration.rs` (including `OwnStore` history isolation, `ClearHistoryScope` cleanup, split-drop placement, group reopen, and cross-space `LeaveTab` fixes).
+  - Replaced `FakeEngine`-delegating backend wrappers with the real `WebKitGtkEngine` (`crates/searlx-engine-linux/src/webkit_engine.rs`, `runtime.rs`, `filters.rs`) with synchronous worker/main-thread teardown eliminating the exit atexit segfault, verified by live X11 `webkitgtk_contract` and `gtk_main_thread` tests plus honest headless error checks; `WkWebViewEngine` and `WebView2Engine` now honestly return `EngineError::NotSupported` until native macOS/Windows bindings are wired (`P1-04`, `P1-05` stay `[!]`).
+  - Built the Search-faithful GTK3 + WebKitGTK shell in `apps/searlx/src/gtk_shell/` (`mod.rs`, `actions.rs`, `engine_bridge.rs`, `internal_pages.rs`, `overlays.rs`, `sidebar.rs`, `stage.rs`, `theme.rs`) with no permanent toolbar, floating `Ctrl+L` address overlay, Site Card popover, 2–4 pane Split View, resizable Side Panel, interactive CSP-hardened `search://` pages, `Ctrl+F` find pill, Peek, Tab Switcher, and `RestoreMode::Normal` asleep session restore + `SaveSession` on exit; wired directly from `apps/searlx/src/main.rs` on Linux (`--gpui-shell` opts into `searlx-ui`).
+  - Refactored `crates/searlx-ui/` (`Shell` / `ShellModel` in `app.rs`) to drive `BrowserController` via `UiSnapshot` and `AppCommand`, removed the temporary `pub mod browser` stub from `crates/searlx-engine-linux/src/lib.rs`, and verified `fmt`, `clippy -D warnings`, headless `searlx-engine-linux`, and full `--workspace` tests under `Xvnc :94`.
 
 ---
 

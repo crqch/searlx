@@ -28,15 +28,6 @@ use searlx_engine::{
     FindOptions, FindState, Image, InjectAt, Rect, ScriptWorld, TabOptions,
 };
 
-/// Temporary stub keeping `apps/searlx/src/main.rs` compiling until Wave 2
-/// constructs the clean GTK shell directly in `apps/searlx`.
-pub mod browser {
-    /// Launch placeholder until the Wave 2 GTK shell replaces the monolith.
-    pub fn run_gtk_browser(_: &[String]) -> Result<(), String> {
-        Err("Linux GTK shell rewrite pending Wave 2".into())
-    }
-}
-
 /// The backend's name.
 pub const ENGINE_NAME: &str = "webkitgtk";
 /// Minimum supported WebKitGTK version floor (`P5-02`).
@@ -736,12 +727,6 @@ mod tests {
         assert!(matrix.should_show_in_ui("shield"));
         assert!(matrix.should_show_in_ui("hardware_video"));
         assert!(matrix.should_show_in_ui("screen_share"));
-    }
-
-    #[test]
-    fn temporary_browser_stub_returns_explicit_wave2_error() {
-        let err = browser::run_gtk_browser(&[]).expect_err("placeholder must fail honestly");
-        assert!(err.contains("Wave 2"));
     }
 
     #[test]
