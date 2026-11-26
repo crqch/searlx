@@ -4,6 +4,7 @@
 //! never tinted by a space colour; only the chrome is.
 
 use gpui::{Hsla, Rgba, hsla, rgb};
+use searlx_core::{LookPreference, Settings, SpaceColor, WashStrength};
 
 /// Semantic colours used by the chrome.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -94,6 +95,22 @@ impl Palette {
         }
         palette
     }
+
+    /// Resolve palette directly from `searlx_core::Settings` (`look` and `tabs.highContrast`).
+    #[must_use]
+    pub fn for_settings(settings: &Settings, system_dark: bool) -> Self {
+        Self::for_theme_with_contrast(
+            Theme::from_look(settings.look),
+            system_dark,
+            settings.tabs_high_contrast,
+        )
+    }
+
+    /// Whether the effective chrome appearance is dark under `settings`.
+    #[must_use]
+    pub fn is_dark(settings: &Settings, system_dark: bool) -> bool {
+        Theme::from_look(settings.look).is_dark(system_dark)
+    }
 }
 
 /// The user's appearance preference.
@@ -109,6 +126,16 @@ pub enum Theme {
 }
 
 impl Theme {
+    /// Map `searlx_core::LookPreference` to UI [`Theme`].
+    #[must_use]
+    pub const fn from_look(look: LookPreference) -> Self {
+        match look {
+            LookPreference::System => Self::System,
+            LookPreference::Light => Self::Light,
+            LookPreference::Dark => Self::Dark,
+        }
+    }
+
     /// Whether this preference means dark for the given system appearance.
     #[must_use]
     pub fn is_dark(self, system_dark: bool) -> bool {
@@ -139,6 +166,19 @@ pub enum SpaceTint {
 }
 
 impl SpaceTint {
+    /// Map `searlx_core::SpaceColor` to [`SpaceTint`].
+    #[must_use]
+    pub const fn from_space_color(color: SpaceColor) -> Self {
+        match color {
+            SpaceColor::None => Self::None,
+            SpaceColor::Blue => Self::Blue,
+            SpaceColor::Green => Self::Green,
+            SpaceColor::Orange => Self::Orange,
+            SpaceColor::Red => Self::Red,
+            SpaceColor::Violet => Self::Violet,
+        }
+    }
+
     /// A low-opacity wash for the chrome.
     #[must_use]
     pub fn wash(self, dark: bool) -> Option<Rgba> {
@@ -151,6 +191,39 @@ impl SpaceTint {
             Self::Violet => (0xEADFFA, 0x2D1F3E),
         };
         Some(rgb(if dark { night } else { light }))
+    }
+
+    /// Accent dot color for spaces and tab-group indicators.
+    #[must_use]
+    pub fn dot_color(self, dark: bool) -> Option<Rgba> {
+        let (light, night) = match self {
+            Self::None => return None,
+            Self::Blue => (0x3B74F2, 0x6C9BFF),
+            Self::Green => (0x2D8F5B, 0x4FC185),
+            Self::Orange => (0xD47221, 0xF09B4D),
+            Self::Red => (0xC0392B, 0xE06C5F),
+            Self::Violet => (0x7A4CE0, 0xA884FF),
+        };
+        Some(rgb(if dark { night } else { light }))
+    }
+
+    /// Blend the space tint over `base` chrome surface using `strength` (`FEATURES.md` §6.1).
+    /// The page surface itself is never tinted.
+    #[must_use]
+    pub fn wash_over(self, base: Hsla, dark: bool, strength: WashStrength) -> Hsla {
+        let Some(tint) = self.dot_color(dark) else {
+            return base;
+        };
+        let (light_alpha, dark_alpha) = strength.opacity_pair();
+        let alpha = if dark { dark_alpha } else { light_alpha };
+        let base_rgba = Rgba::from(base);
+        Rgba {
+            r: base_rgba.r * (1.0 - alpha) + tint.r * alpha,
+            g: base_rgba.g * (1.0 - alpha) + tint.g * alpha,
+            b: base_rgba.b * (1.0 - alpha) + tint.b * alpha,
+            a: base_rgba.a,
+        }
+        .into()
     }
 }
 
@@ -183,6 +256,41 @@ mod tests {
         let hc_dark = Palette::for_theme_with_contrast(Theme::Dark, true, true);
         assert_ne!(normal_dark.text, hc_dark.text);
         assert_ne!(normal_dark.muted, hc_dark.muted);
+    }
+
+    #[test]
+    fn settings_drive_theme_contrast_and_space_wash() {
+        let mut settings = Settings {
+            look: LookPreference::Dark,
+            tabs_high_contrast: true,
+            ..Settings::default()
+        };
+        assert!(Palette::is_dark(&settings, false));
+        let pal = Palette::for_settings(&settings, false);
+        assert_eq!(
+            pal,
+            Palette::for_theme_with_contrast(Theme::Dark, false, true)
+        );
+
+        settings.look = LookPreference::Light;
+        settings.tabs_high_contrast = false;
+        assert!(!Palette::is_dark(&settings, true));
+        assert_eq!(Palette::for_settings(&settings, true), Palette::light());
+
+        let tint = SpaceTint::from_space_color(SpaceColor::Blue);
+        assert_eq!(tint, SpaceTint::Blue);
+        assert_ne!(
+            tint.wash_over(pal.chrome, false, WashStrength::Rich),
+            pal.chrome
+        );
+        assert_eq!(
+            SpaceTint::from_space_color(SpaceColor::None).wash_over(
+                pal.chrome,
+                false,
+                WashStrength::Vivid
+            ),
+            pal.chrome
+        );
     }
 
     #[test]

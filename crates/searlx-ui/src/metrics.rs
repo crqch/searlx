@@ -44,6 +44,29 @@ pub const SPLIT_MIN_PANE: f32 = 250.0;
 /// Divider hit area.
 pub const SPLIT_DIVIDER: f32 = 4.0;
 
+/// Pinned tab square dimension (`FEATURES.md` §3.6).
+pub const PIN_SQUARE_SIZE: f32 = 34.0;
+/// Maximum pinned squares per grid row (`FEATURES.md` §3.6).
+pub const PIN_GRID_COLUMNS: usize = 4;
+/// Top horizontal tab strip height (`TabLayoutMode::TopTabs`).
+pub const TOP_BAR_HEIGHT: f32 = 40.0;
+/// Always-visible address line width (Small, `FEATURES.md` §2.1).
+pub const ADDRESS_LINE_SMALL: f32 = 220.0;
+/// Always-visible address line width (Medium, `FEATURES.md` §2.1).
+pub const ADDRESS_LINE_MEDIUM: f32 = 340.0;
+/// Site Card popover width.
+pub const SITE_CARD_WIDTH: f32 = 320.0;
+/// Floating Find-in-page pill width.
+pub const FIND_PILL_WIDTH: f32 = 340.0;
+/// Top inset for the over-page floating address overlay.
+pub const OVERLAY_TOP_OFFSET: f32 = 72.0;
+/// Maximum visible suggestion rows in the address overlay before scrolling.
+pub const OVERLAY_MAX_SUGGESTIONS: usize = 8;
+/// Duration per invalid-address shake step in milliseconds.
+pub const SHAKE_STEP_MS: u64 = 45;
+/// Horizontal pixel offsets for the damped invalid-address shake (`FEATURES.md` §3.6).
+pub const SHAKE_OFFSETS_PX: [f32; 5] = [8.0, -7.0, 5.0, -3.0, 0.0];
+
 /// Space dot diameter.
 pub const SPACE_DOT: f32 = 8.0;
 /// Default side panel width.
@@ -115,6 +138,36 @@ pub fn pt(value: f32) -> Pixels {
     px(value)
 }
 
+/// Tab row height respecting `sidebar.roomy` (`FEATURES.md` §2.2).
+#[must_use]
+pub const fn tab_row_height(roomy: bool) -> f32 {
+    if roomy {
+        TAB_ROW_HEIGHT_ROOMY
+    } else {
+        TAB_ROW_HEIGHT
+    }
+}
+
+/// Width of the always-visible inline address line (`FEATURES.md` §2.1).
+#[must_use]
+pub const fn address_line_width(width: searlx_core::AddressBarWidth) -> f32 {
+    match width {
+        searlx_core::AddressBarWidth::Small => ADDRESS_LINE_SMALL,
+        searlx_core::AddressBarWidth::Medium => ADDRESS_LINE_MEDIUM,
+    }
+}
+
+/// Horizontal pixel offset for an invalid-address shake animation step.
+/// Collapses to `0.0` when `reduce_motion` is active (`AGENTS.md` §3.3).
+#[must_use]
+pub fn shake_offset_px(step: usize, reduce_motion: bool) -> f32 {
+    if reduce_motion {
+        0.0
+    } else {
+        SHAKE_OFFSETS_PX.get(step).copied().unwrap_or(0.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,5 +179,13 @@ mod tests {
         assert_eq!(icon_device_px(GLYPH_SIZE_PT, 1.0), 18);
         assert_eq!(icon_device_px(GLYPH_SIZE_PT, 2.0), 36);
         assert_eq!(scaled_pt(12.0, 1.5), px(18.0));
+        assert_eq!(shake_offset_px(0, false), 8.0);
+        assert_eq!(shake_offset_px(0, true), 0.0);
+        assert_eq!(tab_row_height(false), TAB_ROW_HEIGHT);
+        assert_eq!(tab_row_height(true), TAB_ROW_HEIGHT_ROOMY);
+        assert_eq!(
+            address_line_width(searlx_core::AddressBarWidth::Medium),
+            ADDRESS_LINE_MEDIUM
+        );
     }
 }
