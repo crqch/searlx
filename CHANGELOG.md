@@ -1,5 +1,13 @@
 # Changelog — searlx
 
+## Unreleased (2026-11-26)
+
+### Architecture Rewrite — Controller, Real WebKitGTK Engine, and GTK3 Shell
+- Added the platform-independent `searlx_core::BrowserController` state machine (`controller.rs`) coordinating commands, directives, `UiSnapshot` projections, and engine events across all domain managers, paired with `searlx_testkit::ControllerDriver` and an end-to-end integration suite (`controller_integration.rs`).
+- Implemented the real `WebKitGtkEngine` (`crates/searlx-engine-linux/src/webkit_engine.rs`, `runtime.rs`, `filters.rs`) with main-thread/worker dispatch and synchronous teardown, removing `FakeEngine` wrappers from production engine crates; `WkWebViewEngine` and `WebView2Engine` honestly return `EngineError::NotSupported` until native bindings are wired on macOS/Windows hardware.
+- Built the Search-faithful GTK3 + WebKitGTK shell in `apps/searlx/src/gtk_shell/` (`mod.rs`, `actions.rs`, `engine_bridge.rs`, `internal_pages.rs`, `overlays.rs`, `sidebar.rs`, `stage.rs`, `theme.rs`) with no permanent toolbar, floating `Ctrl+L` address overlay, Site Card popover, 2–4 pane Split View, resizable Side Panel, interactive CSP-hardened `search://` pages, and asleep session restore.
+- Refactored `crates/searlx-ui/` (`Shell` / `ShellModel`) to drive `BrowserController` directly via `UiSnapshot` and `AppCommand` (accessible via `searlx --gpui-shell`).
+
 ## 0.1.0-rc.1 (2026-11-21)
 
 ### Phase 0 — Feasibility Spike & Architecture Decisions

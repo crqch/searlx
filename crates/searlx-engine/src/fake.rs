@@ -1,4 +1,4 @@
-//! A deterministic in-memory engine for tests and the Phase 0 UI shell.
+//! A deterministic in-memory engine for contract and controller tests.
 //!
 //! The fake is not a browser. It models the contract closely enough that the
 //! app, IPC, and UI can be developed without a native engine, and that contract

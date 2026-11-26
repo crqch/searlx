@@ -3,7 +3,7 @@
 //! This is the only crate that wires concrete platform and engine
 //! implementations together.
 //! - On Linux (`ADR-0002`, `P5-01`), launches the GTK-native + WebKitGTK browser
-//!   shell by default (or the Phase 0 `gpui` shell when `--gpui-shell` is passed).
+//!   shell by default (or the `gpui` shell when `--gpui-shell` is passed).
 //! - With `--probe` or `SEARCH_PROBE`, runs the headless isolated test-world probe
 //!   and exits immediately.
 

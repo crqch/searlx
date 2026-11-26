@@ -17,21 +17,24 @@ A fast, quiet, cross-platform web browser: tabs down the side or across the top,
 searlx/
   Cargo.toml
   crates/
-    searlx-core/           # pure data/logic; URLs, history, bookmarks, sessions,
-                           # imports, address parser, blocking, reader, vault,
-                           # spaces/profiles, pins/folders, splits, sync, AI/agents
-    searlx-engine/         # Engine trait, EngineEvent stream, Capabilities, FakeEngine
-    searlx-engine-macos/   # WKWebView backend descriptor (macOS)
-    searlx-engine-windows/ # WebView2 backend descriptor (Windows)
-    searlx-engine-linux/   # WebKitGTK backend + GTK-native shell prototypes (Linux)
+    searlx-core/           # pure data/logic + BrowserController state machine; URLs,
+                           # history, bookmarks, sessions, imports, address parser,
+                           # blocking, reader, vault, spaces/profiles, pins/folders,
+                           # splits, sync, AI/agents
+    searlx-engine/         # Engine trait, EngineEvent stream, Capabilities, FakeEngine (tests)
+    searlx-engine-macos/   # WKWebView capability descriptor & NotSupported stub (macOS)
+    searlx-engine-windows/ # WebView2 capability descriptor & NotSupported stub (Windows)
+    searlx-engine-linux/   # real WebKitGtkEngine (webkit_engine/runtime/filters) +
+                           # Phase 0 spike/bench/interactions prototypes (Linux)
     searlx-platform/       # Keychain / Credential Manager / Secret Service,
                            # notifications, dialogs, power, packaging
-    searlx-ui/             # gpui chrome: window, tabs, address field, theme,
-                           # metrics, focus & accessibility tree
-    searlx-testkit/        # headless contract tests, golden event transcripts,
-                           # Phase 2/5 performance budget harness
+    searlx-ui/             # controller-backed gpui chrome: window, tabs, address field,
+                           # overlays, theme, metrics, focus & accessibility tree
+    searlx-testkit/        # ControllerDriver, contract & controller integration tests,
+                           # golden transcripts, Phase 2/5 performance budget harness
   apps/
-    searlx/                # composition root & binary (`searlx`, `searlx --probe`)
+    searlx/                # composition root, Search-faithful GTK3 + WebKitGTK shell
+                           # (gtk_shell/), & binary (`searlx`, `--probe`, `--gpui-shell`)
   packaging/
     linux/                 # Flatpak manifest & freedesktop .desktop entry
   scripts/
